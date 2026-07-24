@@ -3006,7 +3006,7 @@ checksum = "e320a6c5ad31d271ad523dcf3ad13e2767ad8b1cb8f047f75a8aeaf8da139da2"
 
 [[package]]
 name = "simulador-z80"
-version = "0.4.2"
+version = "0.4.4"
 dependencies = [
  "console_error_panic_hook",
  "eframe",

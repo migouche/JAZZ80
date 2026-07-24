@@ -130,7 +130,14 @@ pub struct Z80App {
     show_memory_viewer: bool,
     #[serde(skip)]
     memory_viewer_start: String,
+
+    // Location Counter toggle and state tracking
+    #[serde(default)]
+    show_location_counter: bool,
+    #[serde(skip)]
+    is_assembly_stale: bool,
 }
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
@@ -217,23 +224,6 @@ START:
         self.cpu = Z80A::new(self.memory.clone());
         self.attached_devices.clear();
 
-        // Attach default devices (can be made dynamic later)
-        /*
-        {
-             use crate::components::devices::{Keypad, SevenSegmentDisplay};
-
-             // Keypad on Port 0x01
-             let keypad = Rc::new(RefCell::new(Keypad::new(0x01)));
-             self.cpu.attach_device(keypad.clone());
-             self.attached_devices.push(keypad);
-
-             // 7-Segment on Port 0x02
-             let segment = Rc::new(RefCell::new(SevenSegmentDisplay::new(0x02)));
-             self.cpu.attach_device(segment.clone());
-             self.attached_devices.push(segment);
-        }
-        */
-
         self.is_running = false;
 
         if self.tabs.is_empty() {
@@ -249,7 +239,7 @@ START:
             .to_string();
 
         let code = &self.tabs[self.active_tab].code;
-        // Assemble and  Load code
+        // Assemble and Load code
         let (bytes, symbols, addr_map, line_map, error) = match assemble(code) {
             Ok((b, s, m, l)) => (b, s, m, l, None),
             Err(e) => (
@@ -264,6 +254,7 @@ START:
         self.symbol_table = symbols;
         self.address_to_line = addr_map;
         self.line_to_address = line_map;
+        self.is_assembly_stale = false; // Code was fresh assembled
 
         if let Some(err) = error {
             self.last_error = Some(err);
@@ -284,27 +275,27 @@ START:
     }
 
     pub fn new(cc: &eframe::CreationContext) -> Self {
-        if let Some(storage) = cc.storage {
+        let mut app = if let Some(storage) = cc.storage {
             match eframe::get_value::<Z80App>(storage, "z80_workspace") {
-                Some(mut app) => {
-                    // Ensure at least one tab exists if something went wrong
-                    if app.tabs.is_empty() {
-                        app.tabs.push(EditorTab {
+                Some(mut loaded_app) => {
+                    if loaded_app.tabs.is_empty() {
+                        loaded_app.tabs.push(EditorTab {
                             path: None,
                             code: Self::default_code(),
                             is_dirty: false,
                             breakpoints: HashSet::new(),
                         });
                     }
-                    // Re-run setup logic
-                    app.load_and_reset();
-                    app
+                    loaded_app
                 }
                 None => Self::default(),
             }
         } else {
             Self::default()
-        }
+        };
+
+        app.load_and_reset();
+        app
     }
 
     fn open_file_dialog(&mut self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
@@ -348,6 +339,7 @@ START:
             breakpoints: HashSet::new(),
         });
         self.active_tab = self.tabs.len() - 1;
+        self.is_assembly_stale = true;
         self.save_to_storage(storage);
     }
 
@@ -360,6 +352,7 @@ START:
                 if self.active_tab >= self.tabs.len() {
                     self.active_tab = self.tabs.len() - 1;
                 }
+                self.is_assembly_stale = true;
                 self.save_to_storage(storage);
             }
         }
@@ -407,8 +400,10 @@ START:
             .iter()
             .position(|t| t.path.as_ref() == Some(&path))
         {
-            self.active_tab = idx;
-            // Reload from disk? Maybe user wants to revert. For now just switch.
+            if self.active_tab != idx {
+                self.active_tab = idx;
+                self.is_assembly_stale = true;
+            }
             self.save_to_storage(storage);
             return;
         }
@@ -583,28 +578,13 @@ impl Default for Z80App {
                 match reqwest::get(&url).await {
                     Ok(resp) => {
                         if !resp.status().is_success() {
-                            web_sys::console::error_1(
-                                &format!("Failed to fetch {}: status {}", url, resp.status())
-                                    .into(),
-                            );
                             return;
                         }
-                        match resp.json::<Vec<String>>().await {
-                            Ok(list) => {
-                                let _ = examples_sender.send(list);
-                            }
-                            Err(e) => {
-                                web_sys::console::error_1(
-                                    &format!("Failed to parse examples.json: {}", e).into(),
-                                );
-                            }
+                        if let Ok(list) = resp.json::<Vec<String>>().await {
+                            let _ = examples_sender.send(list);
                         }
                     }
-                    Err(e) => {
-                        web_sys::console::error_1(
-                            &format!("Failed to request {}: {}", url, e).into(),
-                        );
-                    }
+                    Err(_) => {}
                 }
             });
         }
@@ -629,7 +609,7 @@ impl Default for Z80App {
             loaded_file_name: "Untitled".to_string(),
             code_theme: highlighting::CodeTheme::one_dark_pro_vivid(),
             recent_files: Vec::new(),
-            attached_devices: Vec::new(), // Initialized empty, populated in load_and_reset or attached manually
+            attached_devices: Vec::new(),
             #[cfg(target_arch = "wasm32")]
             file_receiver: None,
             examples_list: Vec::new(),
@@ -637,6 +617,8 @@ impl Default for Z80App {
             examples_receiver: Some(examples_receiver),
             show_memory_viewer: false,
             memory_viewer_start: "0000".to_string(),
+            show_location_counter: true,
+            is_assembly_stale: false,
         }
     }
 }
@@ -752,6 +734,13 @@ impl eframe::App for Z80App {
                 .response
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
 
+                // Added View Menu Option
+                ui.menu_button("View", |ui| {
+                    ui.checkbox(&mut self.show_location_counter, "Location Counter");
+                })
+                .response
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+
                 ui.menu_button("Devices", |ui| {
                     if ui
                         .button("Add Keypad")
@@ -780,7 +769,7 @@ impl eframe::App for Z80App {
                     {
                         self.pending_modal = Some(ModalType::AddDevice(
                             DeviceType::LcdDisplay,
-                            "3".to_string(), // Default port 3
+                            "3".to_string(),
                         ));
                         ui.close();
                     }
@@ -1535,7 +1524,10 @@ impl eframe::App for Z80App {
                             }
 
                             if let Some(i) = to_activate {
-                                self.active_tab = i;
+                                if self.active_tab != i {
+                                    self.active_tab = i;
+                                    self.is_assembly_stale = true;
+                                }
                             }
                             if let Some(i) = to_close {
                                 action = Some(HeaderAction::CloseTab(i));
@@ -1545,7 +1537,17 @@ impl eframe::App for Z80App {
             });
             ui.separator();
 
-            ui.heading("Assembly Source");
+            ui.horizontal(|ui| {
+                ui.heading("Assembly Source");
+                if self.is_assembly_stale {
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new("⚠ Out of date (re-assemble with Load & Reset)")
+                            .color(egui::Color32::GOLD)
+                            .small(),
+                    );
+                }
+            });
 
             if self.active_tab < self.tabs.len() {
                 let current_tab = &mut self.tabs[self.active_tab];
@@ -1563,6 +1565,7 @@ impl eframe::App for Z80App {
                                 }
                         };
 
+                        // Line numbers column
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 0.0;
                             let font_id = egui::FontId::monospace(14.0);
@@ -1601,6 +1604,42 @@ impl eframe::App for Z80App {
                                 }
                             }
                         });
+
+                        // Location Counter Column
+                        if self.show_location_counter {
+                            ui.add_space(4.0);
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                let font_id = egui::FontId::monospace(14.0);
+                                let addr_color = if self.is_assembly_stale {
+                                    egui::Color32::from_rgb(180, 150, 80)
+                                } else {
+                                    egui::Color32::from_rgb(100, 180, 240)
+                                };
+
+                                for i in 1..=num_lines {
+                                    let addr_str = if let Some(&addr) = self.line_to_address.get(&i) {
+                                        format!("{:04X}", addr)
+                                    } else {
+                                        "    ".to_string()
+                                    };
+
+                                    let label = egui::Label::new(
+                                        egui::RichText::new(addr_str)
+                                            .font(font_id.clone())
+                                            .color(addr_color),
+                                    );
+
+                                    let resp = ui.add(label);
+                                    if self.is_assembly_stale {
+                                        resp.on_hover_text(
+                                            "Location counter is out of date. Click 'Load & Reset' to reassemble.",
+                                        );
+                                    }
+                                }
+                            });
+                            ui.add_space(4.0);
+                        }
 
                         let highlight_line = if !self.is_running || self.cpu.is_halted() {
                             let pc = self.cpu.get_pc();
@@ -1651,6 +1690,7 @@ impl eframe::App for Z80App {
                             .changed()
                         {
                             current_tab.is_dirty = true;
+                            self.is_assembly_stale = true;
                         }
                     });
                 });
