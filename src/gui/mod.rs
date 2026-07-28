@@ -1553,6 +1553,7 @@ impl eframe::App for Z80App {
                 let current_tab = &mut self.tabs[self.active_tab];
 
                 egui::ScrollArea::vertical().show(ui, |ui| {
+
                     ui.horizontal_top(|ui| {
                         let num_lines = if current_tab.code.is_empty() {
                             1
@@ -1565,10 +1566,15 @@ impl eframe::App for Z80App {
                                 }
                         };
 
-                        // Line numbers column
+                        let font_id = egui::FontId::monospace(14.0);
+
+                        // 1. Line numbers column
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 0.0;
-                            let font_id = egui::FontId::monospace(14.0);
+
+                            // Header for Line
+                            ui.label(egui::RichText::new("Line").font(font_id.clone()).strong().color(egui::Color32::GRAY));
+
                             for i in 1..=num_lines {
                                 let is_bp = current_tab.breakpoints.contains(&i);
                                 let bg = if is_bp {
@@ -1583,7 +1589,7 @@ impl eframe::App for Z80App {
                                 };
 
                                 let label = egui::Label::new(
-                                    egui::RichText::new(format!("{: >3}", i))
+                                    egui::RichText::new(format!("{: >4}", i))
                                         .font(font_id.clone())
                                         .color(text_color)
                                         .background_color(bg),
@@ -1605,12 +1611,17 @@ impl eframe::App for Z80App {
                             }
                         });
 
-                        // Location Counter Column
+                        // 2. Location Counter Columns
                         if self.show_location_counter {
                             ui.add_space(4.0);
+
+                            // Address Column
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 0.0;
-                                let font_id = egui::FontId::monospace(14.0);
+
+                                // Header for Address
+                                ui.label(egui::RichText::new("Address").font(font_id.clone()).strong().color(egui::Color32::GRAY));
+
                                 let addr_color = if self.is_assembly_stale {
                                     egui::Color32::from_rgb(180, 150, 80)
                                 } else {
@@ -1638,60 +1649,115 @@ impl eframe::App for Z80App {
                                     }
                                 }
                             });
+
+                            ui.add_space(4.0);
+
+                            // Data Column
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 0.0;
+
+                                // Header for Data
+                                ui.label(egui::RichText::new("Data").font(font_id.clone()).strong().color(egui::Color32::GRAY));
+
+                                let data_color = if self.is_assembly_stale {
+                                    egui::Color32::from_rgb(180, 150, 80)
+                                } else {
+                                    egui::Color32::from_rgb(150, 220, 150)
+                                };
+
+                                for i in 1..=num_lines {
+                                    let mut data_str = "           ".to_string(); // Default 11 spaces to accommodate up to 4 bytes layout
+
+                                    if let Some(&addr) = self.line_to_address.get(&i) {
+                                        // Filter map to find the immediately following address to determine length
+                                        let next_addr = self.line_to_address.values()
+                                            .filter(|&&a| a > addr)
+                                            .min()
+                                            .copied();
+
+                                        let len = if let Some(n) = next_addr {
+                                            (n.wrapping_sub(addr)).min(4) as u16 // Standard Z80 instructions max out at 4 bytes
+                                        } else {
+                                            1 // Fallback
+                                        };
+
+                                        let mut bytes = Vec::new();
+                                        for offset in 0..len {
+                                            let val = self.memory.borrow().read(addr.wrapping_add(offset));
+                                            bytes.push(format!("{:02X}", val));
+                                        }
+                                        // Apply left alignment with fixed width for smooth column rendering
+                                        data_str = format!("{: <11}", bytes.join(" "));
+                                    }
+
+                                    let label = egui::Label::new(
+                                        egui::RichText::new(data_str)
+                                            .font(font_id.clone())
+                                            .color(data_color),
+                                    );
+                                    ui.add(label);
+                                }
+                            });
+
                             ui.add_space(4.0);
                         }
 
-                        let highlight_line = if !self.is_running || self.cpu.is_halted() {
-                            let pc = self.cpu.get_pc();
-                            if self.cpu.is_halted() {
-                                // If halted, PC points to next instruction.
-                                // We want to highlight the HALT instruction itself (the previous one).
-                                let mut best_match = None;
-                                let mut max_addr = -1i32;
+                        // 3. Code Editor Column
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            // Add a matching header so the text edit component starts exactly on the same row!
+                            ui.label(egui::RichText::new("Code").font(font_id.clone()).strong().color(egui::Color32::GRAY));
 
-                                for (&addr, &line) in &self.address_to_line {
-                                    if addr < pc {
-                                        if (addr as i32) > max_addr {
-                                            max_addr = addr as i32;
-                                            best_match = Some(line);
+                            let highlight_line = if !self.is_running || self.cpu.is_halted() {
+                                let pc = self.cpu.get_pc();
+                                if self.cpu.is_halted() {
+                                    let mut best_match = None;
+                                    let mut max_addr = -1i32;
+
+                                    for (&addr, &line) in &self.address_to_line {
+                                        if addr < pc {
+                                            if (addr as i32) > max_addr {
+                                                max_addr = addr as i32;
+                                                best_match = Some(line);
+                                            }
                                         }
                                     }
+                                    best_match.or_else(|| self.address_to_line.get(&pc).copied())
+                                } else {
+                                    self.address_to_line.get(&pc).copied()
                                 }
-                                best_match.or_else(|| self.address_to_line.get(&pc).copied())
                             } else {
-                                self.address_to_line.get(&pc).copied()
-                            }
-                        } else {
-                            None
-                        };
-
-                        let theme = &self.code_theme;
-                        let mut layouter =
-                            |ui: &egui::Ui, string: &dyn TextBuffer, _wrap_width: f32| {
-                                let layout_job = highlighting::highlight(
-                                    ui.ctx(),
-                                    theme,
-                                    string.as_str(),
-                                    highlight_line,
-                                );
-                                ui.painter().layout_job(layout_job)
+                                None
                             };
 
-                        if ui
-                            .add(
-                                egui::TextEdit::multiline(&mut current_tab.code)
-                                    .font(egui::TextStyle::Monospace) // fallback
-                                    .layouter(&mut layouter)
-                                    .code_editor()
-                                    .desired_width(f32::INFINITY)
-                                    .desired_rows(25)
-                                    .lock_focus(true),
-                            )
-                            .changed()
-                        {
-                            current_tab.is_dirty = true;
-                            self.is_assembly_stale = true;
-                        }
+                            let theme = &self.code_theme;
+                            let mut layouter =
+                                |ui: &egui::Ui, string: &dyn TextBuffer, _wrap_width: f32| {
+                                    let layout_job = highlighting::highlight(
+                                        ui.ctx(),
+                                        theme,
+                                        string.as_str(),
+                                        highlight_line,
+                                    );
+                                    ui.painter().layout_job(layout_job)
+                                };
+
+                            if ui
+                                .add(
+                                    egui::TextEdit::multiline(&mut current_tab.code)
+                                        .font(egui::TextStyle::Monospace)
+                                        .layouter(&mut layouter)
+                                        .code_editor()
+                                        .desired_width(f32::INFINITY)
+                                        .desired_rows(25)
+                                        .lock_focus(true),
+                                )
+                                .changed()
+                            {
+                                current_tab.is_dirty = true;
+                                self.is_assembly_stale = true;
+                            }
+                        });
                     });
                 });
             } else {

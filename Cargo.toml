@@ -1,5 +1,5 @@
 [package]
-name = "simulador-z80"
+name = "JAZZ80"
 version = "0.4.4"
 edition = "2024"
 resolver = "3"
