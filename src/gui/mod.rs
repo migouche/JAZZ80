@@ -159,6 +159,7 @@ pub fn run() -> eframe::Result<()> {
     Ok(())
 }
 
+
 impl Z80App {
     fn default_code() -> String {
         r"        ORG 0000h
@@ -203,7 +204,25 @@ START:
             ),
         ]
     }
+/*
+    fn line_to_str(&self, line: &str, i: usize) -> String {
+        let mut clean = line.split(';').next().unwrap_or("").trim();
 
+        if let Some(idx) = clean.find(':') {
+            clean = &clean[idx + 1..].trim();
+        }
+        let upper = clean.to_uppercase();
+
+        let emits_code = !clean.is_empty() && !upper.starts_with("ORG") && !upper.starts_with("EQU");
+        let mut addr_str = "    ".to_string(); // padding, gotta figure out a better way
+        if emits_code{
+            if let Some(&addr) = self.line_to_address.get(&i){
+                addr_str = format!("{:04X} ", addr);
+            }
+        }
+        addr_str
+    }
+*/
     fn check_shortcuts(&self, ctx: &egui::Context) -> Option<HeaderAction> {
         let mut action = None;
         ctx.input_mut(|i| {
@@ -1615,11 +1634,12 @@ impl eframe::App for Z80App {
                         if self.show_location_counter {
                             ui.add_space(4.0);
 
+                            // Extract lines once so we can parse their content
+                            let lines: Vec<&str> = current_tab.code.lines().collect();
+
                             // Address Column
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 0.0;
-
-                                // Header for Address
                                 ui.label(egui::RichText::new("Address").font(font_id.clone()).strong().color(egui::Color32::GRAY));
 
                                 let addr_color = if self.is_assembly_stale {
@@ -1629,23 +1649,38 @@ impl eframe::App for Z80App {
                                 };
 
                                 for i in 1..=num_lines {
-                                    let addr_str = if let Some(&addr) = self.line_to_address.get(&i) {
-                                        format!("{:04X}", addr)
-                                    } else {
-                                        "    ".to_string()
-                                    };
+                                    let line_text = lines.get(i - 1).unwrap_or(&"");
+                                    
+                                    // Extract the actual instruction ignoring comments and labels
+                                    let mut clean = line_text.split(';').next().unwrap_or("").trim();
+                                    if let Some(idx) = clean.find(':') {
+                                        clean = clean[idx + 1..].trim();
+                                    }
+                                    let upper = clean.to_uppercase();
+                                    
+                                    // Determine if this line actually emits code
+                                    let emits_code = !clean.is_empty() 
+                                        && !upper.starts_with("ORG ") 
+                                        && !upper.starts_with("EQU ") 
+                                        && !upper.contains(" EQU ");
+
+                                    let mut addr_str = "    ".to_string();
+                                    
+                                    if emits_code {
+                                        if let Some(&addr) = self.line_to_address.get(&i) {
+                                            addr_str = format!("{:04X}", addr);
+                                        }
+                                    }
 
                                     let label = egui::Label::new(
                                         egui::RichText::new(addr_str)
                                             .font(font_id.clone())
                                             .color(addr_color),
                                     );
-
                                     let resp = ui.add(label);
+                                    
                                     if self.is_assembly_stale {
-                                        resp.on_hover_text(
-                                            "Location counter is out of date. Click 'Load & Reset' to reassemble.",
-                                        );
+                                        resp.on_hover_text("Location counter is out of date. Click 'Load & Reset' to reassemble.");
                                     }
                                 }
                             });
@@ -1655,8 +1690,6 @@ impl eframe::App for Z80App {
                             // Data Column
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 0.0;
-
-                                // Header for Data
                                 ui.label(egui::RichText::new("Data").font(font_id.clone()).strong().color(egui::Color32::GRAY));
 
                                 let data_color = if self.is_assembly_stale {
@@ -1666,32 +1699,128 @@ impl eframe::App for Z80App {
                                 };
 
                                 for i in 1..=num_lines {
-                                    let mut data_str = "           ".to_string(); // Default 11 spaces to accommodate up to 4 bytes layout
+                                    let line_text = lines.get(i - 1).unwrap_or(&"");
+                                    
+                                    // Parse again for the Data column
+                                    let mut clean = line_text.split(';').next().unwrap_or("").trim();
+                                    if let Some(idx) = clean.find(':') {
+                                        clean = clean[idx + 1..].trim();
+                                    }
+                                    let upper = clean.to_uppercase();
+                                    
+                                    let emits_code = !clean.is_empty() 
+                                        && !upper.starts_with("ORG ") 
+                                        && !upper.starts_with("EQU ") 
+                                        && !upper.contains(" EQU ");
 
-                                    if let Some(&addr) = self.line_to_address.get(&i) {
-                                        // Filter map to find the immediately following address to determine length
-                                        let next_addr = self.line_to_address.values()
-                                            .filter(|&&a| a > addr)
-                                            .min()
-                                            .copied();
+                                    let mut data_str = "".to_string();
 
-                                        let len = if let Some(n) = next_addr {
-                                            (n.wrapping_sub(addr)).min(4) as u16 // Standard Z80 instructions max out at 4 bytes
-                                        } else {
-                                            1 // Fallback
-                                        };
+                                    if emits_code {
+                                        if let Some(&addr) = self.line_to_address.get(&i) {
+                                            
+                                            // 1. Z80 length decoder to fetch the EXACT required bytes 
+                                            let len = if upper.starts_with("DB ") || upper.starts_with("DEFB ") {
+                                                (clean.split(',').count() as u16).min(8) // Cap visualizer to 8 bytes
+                                            } else if upper.starts_with("DW ") || upper.starts_with("DEFW ") {
+                                                (clean.split(',').count() as u16 * 2).min(8)
+                                            } else if upper.starts_with("DS ") || upper.starts_with("DEFS ") {
+                                                0
+                                            } else {
+                                                let mem = self.memory.borrow();
+                                                let b0 = mem.read(addr);
+                                                match b0 {
+                                                    0xCB => 2,
+                                                    0xDD | 0xFD => {
+                                                        let b1 = mem.read(addr.wrapping_add(1));
+                                                        match b1 {
+                                                            0xCB => 4,
+                                                            0x21 | 0x22 | 0x2A | 0x36 => 4,
+                                                            0x34 | 0x35 => 3,
+                                                            0x46 | 0x4E | 0x56 | 0x5E | 0x66 | 0x6E | 0x7E => 3,
+                                                            0x70..=0x75 | 0x77 => 3,
+                                                            0x86 | 0x8E | 0x96 | 0x9E | 0xA6 | 0xAE | 0xB6 | 0xBE => 3,
+                                                            _ => 2,
+                                                        }
+                                                    }
+                                                    0xED => {
+                                                        let b1 = mem.read(addr.wrapping_add(1));
+                                                        match b1 {
+                                                            0x43 | 0x4B | 0x53 | 0x5B | 0x73 | 0x7B => 4,
+                                                            _ => 2,
+                                                        }
+                                                    }
+                                                    0xC2 | 0xC3 | 0xCA | 0xD2 | 0xDA | 0xE2 | 0xEA | 0xF2 | 0xFA | 0xCD | 0xCC | 0xC4 | 0xD4 | 0xDC | 0xE4 | 0xEC | 0xF4 | 0xFC => 3,
+                                                    0x01 | 0x11 | 0x21 | 0x31 | 0x22 | 0x2A | 0x32 | 0x3A => 3,
+                                                    0xC6 | 0xCE | 0xD6 | 0xDE | 0xE6 | 0xEE | 0xF6 | 0xFE => 2,
+                                                    0x06 | 0x0E | 0x16 | 0x1E | 0x26 | 0x2E | 0x3E => 2,
+                                                    0x10 | 0x18 | 0x20 | 0x28 | 0x30 | 0x38 => 2,
+                                                    0xDB | 0xD3 => 2,
+                                                    _ => 1,
+                                                }
+                                            };
 
-                                        let mut bytes = Vec::new();
-                                        for offset in 0..len {
-                                            let val = self.memory.borrow().read(addr.wrapping_add(offset));
-                                            bytes.push(format!("{:02X}", val));
+                                            // 2. Fetch the bytes
+                                            let mut bytes = Vec::new();
+                                            let mem = self.memory.borrow();
+                                            for offset in 0..len {
+                                                bytes.push(mem.read(addr.wrapping_add(offset)));
+                                            }
+
+                                            // 3. String formatting based on text structure 
+                                            if !bytes.is_empty() {
+                                                if upper.starts_with("DB ") || upper.starts_with("DEFB ") {
+                                                    data_str = bytes.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(", ");
+                                                } else if upper.starts_with("DW ") || upper.starts_with("DEFW ") {
+                                                    let mut words = Vec::new();
+                                                    for chunk in bytes.chunks(2) {
+                                                        if chunk.len() == 2 {
+                                                            words.push(format!("{:02X}{:02X}", chunk[1], chunk[0])); // Little-endian format for display
+                                                        } else {
+                                                            words.push(format!("{:02X}", chunk[0]));
+                                                        }
+                                                    }
+                                                    data_str = words.join(", ");
+                                                } else {
+                                                    let mut op_len = 1;
+                                                    if bytes.len() > 1 && (bytes[0] == 0xCB || bytes[0] == 0xDD || bytes[0] == 0xED || bytes[0] == 0xFD) {
+                                                        op_len = 2; // Keep prefixes glued to the main Opcode
+                                                    }
+                                                    let op_hex = bytes[0..op_len].iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join("");
+                                                    
+                                                    if bytes.len() <= op_len {
+                                                        data_str = op_hex;
+                                                    } else {
+                                                        let arg_hex = bytes[op_len..].iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(" ");
+                                                        let has_comma = clean.contains(',');
+                                                        let has_parens = clean.contains('(') && clean.contains(')');
+
+                                                        // Adapt the Data String punctuation based on the instruction
+                                                        if has_comma && has_parens {
+                                                            let comma_pos = clean.find(',').unwrap_or(usize::MAX);
+                                                            let paren_pos = clean.find('(').unwrap_or(usize::MAX);
+                                                            if paren_pos < comma_pos {
+                                                                data_str = format!("{} ({})", op_hex, arg_hex); // i.e. LD (nn), A
+                                                            } else {
+                                                                data_str = format!("{}, ({})", op_hex, arg_hex); // i.e. LD A, (nn)
+                                                            }
+                                                        } else if has_comma {
+                                                            data_str = format!("{}, {}", op_hex, arg_hex);
+                                                        } else if has_parens {
+                                                            data_str = format!("{} ({})", op_hex, arg_hex);
+                                                        } else {
+                                                            data_str = format!("{} {}", op_hex, arg_hex);
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
-                                        // Apply left alignment with fixed width for smooth column rendering
-                                        data_str = format!("{: <11}", bytes.join(" "));
                                     }
 
+                                    // Pad output heavily so multi-byte values (e.g. DD21, 34 12) have a fixed column space
+                                    let formatted_str = format!("{: <14}", data_str);
+
                                     let label = egui::Label::new(
-                                        egui::RichText::new(data_str)
+                                        egui::RichText::new(formatted_str)
                                             .font(font_id.clone())
                                             .color(data_color),
                                     );
@@ -1701,7 +1830,6 @@ impl eframe::App for Z80App {
 
                             ui.add_space(4.0);
                         }
-
                         // 3. Code Editor Column
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 0.0;
