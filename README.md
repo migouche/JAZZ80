@@ -1,7 +1,7 @@
 <div align="center">
 
 <p align="center">
-  <img src="docs/banner.svg" alt="JAZZ80 banner" />
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=0:1a0033,50:5a189a,100:9d4edd&height=180&section=header&text=JAZZ80&fontSize=60&fontColor=e0aaff&animation=fadeIn&fontAlignY=35&desc=Just%20Another%20Zilog%20Z80&descSize=20&descAlignY=55&descColor=c77dff" alt="JAZZ80 banner" />
 </p>
 
 </div>
@@ -12,10 +12,10 @@ A **Zilog Z80 CPU simulator, editor and debugger** written in Rust, built on top
 
 ![JAZZ80 screenshot](docs/ui.png)   
 
-[![License: GPL v3](https://img.shields.io/github/license/migouche/simulador-z80?color=6a5acd)](https://github.com/migouche/simulador-z80/blob/master/LICENSE)
-[![Web demo](https://img.shields.io/badge/Web%20demo-Open%20app-6a5acd?logo=github&logoColor=white)](https://migouche.github.io/simulador-z80/)
-[![Latest release](https://img.shields.io/github/v/release/migouche/simulador-z80?sort=date&color=6a5acd)](https://github.com/migouche/simulador-z80/releases)
-[![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/migouche/49a8384882f617ed2ce5fb36bb2fa343/raw/coverage.json)](https://github.com/migouche/simulador-z80/actions)
+[![License: GPL v3](https://img.shields.io/github/license/migouche/JAZZ80?color=6a5acd)](https://github.com/migouche/JAZZ80/blob/master/LICENSE)
+[![Web demo](https://img.shields.io/badge/Web%20demo-Open%20app-6a5acd?logo=github&logoColor=white)](https://migouche.github.io/JAZZ80/)
+[![Latest release](https://img.shields.io/github/v/release/migouche/JAZZ80?sort=date&color=6a5acd)](https://github.com/migouche/JAZZ80/releases)
+[![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/migouche/49a8384882f617ed2ce5fb36bb2fa343/raw/coverage.json)](https://github.com/migouche/JAZZ80/actions)
 ![Rust edition](https://img.shields.io/badge/Rust-2024_edition-6a5acd?logo=rust&logoColor=white)
 ![GUI](https://img.shields.io/badge/GUI-egui%20%2F%20eframe-6a5acd)
 ![WebAssembly](https://img.shields.io/badge/Web-WebAssembly-6a5acd?logo=webassembly&logoColor=white)
@@ -50,14 +50,14 @@ JAZZ80 started life as a Bachelor's Thesis (*Trabajo de Fin de Grado*) at Univer
 ### Run natively
 
 ```bash
-git clone https://github.com/migouche/simulador-z80.git
-cd simulador-z80
+git clone https://github.com/migouche/JAZZ80.git
+cd JAZZ80
 cargo run --release # release build is faster, but will take longer to compile
 ```
 
 ### Run in the browser
 
-The project is hosted on GitHub Pages at [https://migouche.github.io/simulador-z80/](https://migouche.github.io/simulador-z80/), but you can also run it locally.
+The project is hosted on GitHub Pages at [https://migouche.github.io/JAZZ80/](https://migouche.github.io/JAZZ80/), but you can also run it locally.
 
 The web build uses [Trunk](https://trunkrs.dev/) to compile and bundle the app as WebAssembly:
 
