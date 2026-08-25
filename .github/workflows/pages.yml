@@ -30,7 +30,7 @@ jobs:
 
       - name: Build with Trunk
         # Explicitly set the public URL to your repo name with leading/trailing slashes
-        run: trunk build --release --public-url /simulador-z80/
+        run: trunk build --release --public-url /JAZZ80/
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

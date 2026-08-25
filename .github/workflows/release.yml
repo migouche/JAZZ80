@@ -10,7 +10,7 @@ on:
 
 env:
   # TODO: Change this to your actual binary name from Cargo.toml
-  BINARY_NAME: simulador-z80
+  BINARY_NAME: JAZZ80
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
@@ -113,5 +113,5 @@ jobs:
           prerelease: false
           files: |
             artifacts/**/*.exe
-            artifacts/**/simulador-z80-linux-amd64
-            artifacts/**/simulador-z80-macos-amd64
+            artifacts/**/JAZZ80-linux-amd64
+            artifacts/**/JAZZ80-macos-amd64
