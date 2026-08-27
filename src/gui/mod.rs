@@ -53,6 +53,7 @@ enum DeviceType {
     LcdDisplay,
     GenericInterrupt,
     NmiTrigger,
+    VirtualTerminal,
 }
 
 #[derive(Clone, PartialEq)]
@@ -159,7 +160,6 @@ pub fn run() -> eframe::Result<()> {
     Ok(())
 }
 
-
 impl Z80App {
     fn default_code() -> String {
         r"        ORG 0000h
@@ -204,25 +204,25 @@ START:
             ),
         ]
     }
-/*
-    fn line_to_str(&self, line: &str, i: usize) -> String {
-        let mut clean = line.split(';').next().unwrap_or("").trim();
+    /*
+        fn line_to_str(&self, line: &str, i: usize) -> String {
+            let mut clean = line.split(';').next().unwrap_or("").trim();
 
-        if let Some(idx) = clean.find(':') {
-            clean = &clean[idx + 1..].trim();
-        }
-        let upper = clean.to_uppercase();
-
-        let emits_code = !clean.is_empty() && !upper.starts_with("ORG") && !upper.starts_with("EQU");
-        let mut addr_str = "    ".to_string(); // padding, gotta figure out a better way
-        if emits_code{
-            if let Some(&addr) = self.line_to_address.get(&i){
-                addr_str = format!("{:04X} ", addr);
+            if let Some(idx) = clean.find(':') {
+                clean = &clean[idx + 1..].trim();
             }
+            let upper = clean.to_uppercase();
+
+            let emits_code = !clean.is_empty() && !upper.starts_with("ORG") && !upper.starts_with("EQU");
+            let mut addr_str = "    ".to_string(); // padding, gotta figure out a better way
+            if emits_code{
+                if let Some(&addr) = self.line_to_address.get(&i){
+                    addr_str = format!("{:04X} ", addr);
+                }
+            }
+            addr_str
         }
-        addr_str
-    }
-*/
+    */
     fn check_shortcuts(&self, ctx: &egui::Context) -> Option<HeaderAction> {
         let mut action = None;
         ctx.input_mut(|i| {
@@ -804,6 +804,17 @@ impl eframe::App for Z80App {
                         ui.close();
                     }
                     if ui
+                        .button("Add Virtual Terminal")
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                    {
+                        self.pending_modal = Some(ModalType::AddDevice(
+                            DeviceType::VirtualTerminal,
+                            "0".to_string(),
+                        ));
+                        ui.close();
+                    }
+                    if ui
                         .button("Add NMI Trigger")
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .clicked()
@@ -1165,7 +1176,7 @@ impl eframe::App for Z80App {
             });
 
         let mut sorted_symbols: Vec<_> = self.symbol_table.iter().collect();
-        sorted_symbols.sort_by_key(|item| item.1.address);
+        sorted_symbols.sort_by_key(|item| item.1.source_order);
 
         egui::SidePanel::right("vars_panel")
             .resizable(true)
@@ -1187,18 +1198,26 @@ impl eframe::App for Z80App {
                                 ui.label(egui::RichText::new("Value").strong());
                                 ui.end_row();
 
-                                for (name, symbol) in &sorted_symbols {
-                                    if symbol.kind == SymbolType::Label {
-                                        continue;
-                                    }
+                                for (name, symbol) in sorted_symbols.iter().
+                                filter(|s|
+                                    !matches!(s.1.kind, SymbolType::Label | SymbolType::Constant)) {
 
                                     let addr = symbol.address;
 
                                     // Determine display format
                                     let format = self.symbol_display_prefs.get(*name).cloned().unwrap_or(SymbolDisplayFormat::Default);
 
+                                    // Continuation rows use an internal suffix only to keep map keys unique.
+                                    let display_name = if name.ends_with(']')
+                                        && name.rfind('[').is_some()
+                                    {
+                                        ""
+                                    } else {
+                                        *name
+                                    };
+
                                     // Context menu for format selection
-                                    let label_resp = ui.label(*name);
+                                    let label_resp = ui.label(display_name);
                                     label_resp.context_menu(|ui| {
                                         ui.label(egui::RichText::new("Display Format").strong());
 
@@ -1492,7 +1511,7 @@ impl eframe::App for Z80App {
                                         ..Default::default()
                                     })
                                     .stroke(egui::Stroke::new(
-                                        1.0,
+                                        1.0_f32,
                                         ui.visuals().widgets.noninteractive.bg_stroke.color,
                                     ))
                                     .show(ui, |ui| {
@@ -1650,22 +1669,22 @@ impl eframe::App for Z80App {
 
                                 for i in 1..=num_lines {
                                     let line_text = lines.get(i - 1).unwrap_or(&"");
-                                    
+
                                     // Extract the actual instruction ignoring comments and labels
                                     let mut clean = line_text.split(';').next().unwrap_or("").trim();
                                     if let Some(idx) = clean.find(':') {
                                         clean = clean[idx + 1..].trim();
                                     }
                                     let upper = clean.to_uppercase();
-                                    
+
                                     // Determine if this line actually emits code
-                                    let emits_code = !clean.is_empty() 
+                                    let emits_code = !clean.is_empty()
                                         && !upper.starts_with("ORG ") 
                                         && !upper.starts_with("EQU ") 
                                         && !upper.contains(" EQU ");
 
                                     let mut addr_str = "    ".to_string();
-                                    
+
                                     if emits_code {
                                         if let Some(&addr) = self.line_to_address.get(&i) {
                                             addr_str = format!("{:04X}", addr);
@@ -1678,7 +1697,7 @@ impl eframe::App for Z80App {
                                             .color(addr_color),
                                     );
                                     let resp = ui.add(label);
-                                    
+
                                     if self.is_assembly_stale {
                                         resp.on_hover_text("Location counter is out of date. Click 'Load & Reset' to reassemble.");
                                     }
@@ -1700,15 +1719,15 @@ impl eframe::App for Z80App {
 
                                 for i in 1..=num_lines {
                                     let line_text = lines.get(i - 1).unwrap_or(&"");
-                                    
+
                                     // Parse again for the Data column
                                     let mut clean = line_text.split(';').next().unwrap_or("").trim();
                                     if let Some(idx) = clean.find(':') {
                                         clean = clean[idx + 1..].trim();
                                     }
                                     let upper = clean.to_uppercase();
-                                    
-                                    let emits_code = !clean.is_empty() 
+
+                                    let emits_code = !clean.is_empty()
                                         && !upper.starts_with("ORG ") 
                                         && !upper.starts_with("EQU ") 
                                         && !upper.contains(" EQU ");
@@ -1717,7 +1736,7 @@ impl eframe::App for Z80App {
 
                                     if emits_code {
                                         if let Some(&addr) = self.line_to_address.get(&i) {
-                                            
+
                                             // 1. Z80 length decoder to fetch the EXACT required bytes 
                                             let len = if upper.starts_with("DB ") || upper.starts_with("DEFB ") {
                                                 (clean.split(',').count() as u16).min(8) // Cap visualizer to 8 bytes
@@ -1786,7 +1805,7 @@ impl eframe::App for Z80App {
                                                         op_len = 2; // Keep prefixes glued to the main Opcode
                                                     }
                                                     let op_hex = bytes[0..op_len].iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join("");
-                                                    
+
                                                     if bytes.len() <= op_len {
                                                         data_str = op_hex;
                                                     } else {
@@ -1935,6 +1954,7 @@ impl eframe::App for Z80App {
                         ModalType::AddDevice(dev_type, port_text) => {
                             use crate::components::devices::{
                                 GenericInterruptDevice, Keypad, LcdDisplay, SevenSegmentDisplay,
+                                VirtualTerminal,
                             };
                             ui.label("Enter Port Number (Hex):");
                             ui.text_edit_singleline(port_text);
@@ -1960,6 +1980,9 @@ impl eframe::App for Z80App {
                                                 DeviceType::LcdDisplay => {
                                                     Rc::new(RefCell::new(LcdDisplay::new(port)))
                                                 }
+                                                DeviceType::VirtualTerminal => Rc::new(
+                                                    RefCell::new(VirtualTerminal::new(port)),
+                                                ),
                                                 DeviceType::GenericInterrupt => Rc::new(
                                                     RefCell::new(GenericInterruptDevice::new(port)),
                                                 ),

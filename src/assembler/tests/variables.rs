@@ -68,17 +68,10 @@ fn test_dw_basic() {
 
 #[test]
 fn test_label_forward_ref_in_db() {
-    // DB can use labels?
-    // Pass 1: "Val: DB LABEL" -> Label unknown. parse_instruction is_dry_run=true. Returns 1 byte.
-    // Pass 2: "Val: DB LABEL" -> Label known (hopefully).
-    // Let's test.
     let code = "
         DB END
         END: NOP
     ";
-    // END is at 1.
-    // DB 1.
-    // NOP is 0x00.
     let res = asm(code);
     assert_eq!(res, vec![0x01, 0x00]);
 }
@@ -86,15 +79,32 @@ fn test_label_forward_ref_in_db() {
 #[test]
 fn test_org_gap() {
     let code = "
-        NOP
+        EXX
         ORG 0x0004
-        NOP
+        EXX
     ";
-    // 0: NOP
-    // 1..3: Zeros
-    // 4: NOP
     let res = asm(code);
-    assert_eq!(res, vec![0x00, 0x00, 0x00, 0x00, 0x00]);
-    // NOP (00), 00, 00, 00, NOP (00).
-    // Oh NOP is 0x00? Yes.
+    assert_eq!(res, vec![0xD9, 0x00, 0x00, 0x00, 0xD9]);
+}
+
+#[test]
+fn test_equ_constants() {
+    let code = "
+        TERM_DATA EQU 80h
+        TERM_STATUS EQU 81h
+        LD A, 2Ah
+        OUT (TERM_DATA), A
+        IN A, (TERM_STATUS)
+        JP DONE
+    DONE:
+        RET
+    ";
+    let (bytes, symbols, _, _) = assemble(code).unwrap();
+
+    assert_eq!(
+        bytes,
+        vec![0x3E, 0x2A, 0xD3, 0x80, 0xDB, 0x81, 0xC3, 0x09, 0x00, 0xC9]
+    );
+    assert_eq!(symbols["TERM_DATA"].address, 0x80);
+    assert_eq!(symbols["TERM_STATUS"].address, 0x81);
 }

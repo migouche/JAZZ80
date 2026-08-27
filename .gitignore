@@ -4,3 +4,4 @@ tarpaulin-report.json
 coverage.json
 curl.sh
 /dist
+CHANGELOG.md

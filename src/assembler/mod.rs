@@ -35,6 +35,7 @@ pub enum Operand {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SymbolType {
     Label,         // Code label
+    Constant,      // EQU constant
     Byte,          // DB/DEFB (single byte)
     Word,          // DW/DEFW (single word)
     String(usize), // Length
@@ -45,6 +46,7 @@ pub enum SymbolType {
 pub struct Symbol {
     pub address: u16,
     pub kind: SymbolType,
+    pub source_order: usize,
 }
 
 pub fn assemble(
@@ -58,10 +60,12 @@ pub fn assemble(
     ),
     String,
 > {
-    let mut labels = HashMap::new();
+    let mut labels: HashMap<String, Symbol> = HashMap::new();
     let mut current_pc = 0u16;
     let mut instructions = Vec::new();
     let mut line_addresses = HashMap::new();
+    let mut latest_global_label: Option<String> = None;
+    let mut active_data_label: Option<String> = None;
 
     // Pass 1: Build Symbol Table
     for (line_idx, line) in code.lines().enumerate() {
@@ -80,13 +84,58 @@ pub fn assemble(
 
         let mut current_label: Option<String> = None;
 
+        // EQU definitions do not emit bytes or change the program counter.
+        if tokens.len() == 3 {
+            if let (Token::Identifier(name), Token::Identifier(mnemonic)) = (&tokens[0], &tokens[1])
+            {
+                if mnemonic == "EQU" {
+                    let constant_name = qualify_label(name, latest_global_label.as_deref())
+                        .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+                    if labels.contains_key(&constant_name) {
+                        return Err(format!(
+                            "Line {}: Duplicate symbol '{}'",
+                            line_idx + 1,
+                            constant_name
+                        ));
+                    }
+                    let equ_operands = parse_operands(&tokens[2..])
+                        .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+                    if equ_operands.len() != 1 {
+                        return Err(format!("Line {}: EQU expects one value", line_idx + 1));
+                    }
+                    let known_symbols: HashMap<String, u16> =
+                        labels.iter().map(|(k, v)| (k.clone(), v.address)).collect();
+                    let value = resolve_immediate(&equ_operands[0], &known_symbols, false)
+                        .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+                    labels.insert(
+                        constant_name,
+                        Symbol {
+                            address: value,
+                            kind: SymbolType::Constant,
+                            source_order: line_idx,
+                        },
+                    );
+                    continue;
+                }
+            }
+        }
+
         // Label Def
         if tokens.len() >= 2 {
             if let (Token::Identifier(name), Token::Colon) = (&tokens[0], &tokens[1]) {
-                if labels.contains_key(name) {
-                    return Err(format!("Line {}: Duplicate label '{}'", line_idx + 1, name));
+                let label_name = qualify_label(name, latest_global_label.as_deref())
+                    .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+                if labels.contains_key(&label_name) {
+                    return Err(format!(
+                        "Line {}: Duplicate label '{}'",
+                        line_idx + 1,
+                        label_name
+                    ));
                 }
-                current_label = Some(name.clone());
+                if !name.starts_with('.') {
+                    latest_global_label = Some(label_name.clone());
+                }
+                current_label = Some(label_name.clone());
 
                 // Determine symbol type based on what follows
                 let mut sym_kind = SymbolType::Label;
@@ -102,61 +151,93 @@ pub fn assemble(
                 }
 
                 labels.insert(
-                    name.clone(),
+                    label_name,
                     Symbol {
                         address: current_pc,
                         kind: sym_kind,
+                        source_order: line_idx,
                     },
                 );
                 tokens.drain(0..2);
             }
         }
 
+        tokens = qualify_local_tokens(&tokens, latest_global_label.as_deref())
+            .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+
         if tokens.is_empty() {
+            active_data_label = current_label;
             continue;
         }
 
-        let bytes = parse_instruction(&tokens, current_pc, &HashMap::new(), true)
+        let is_db = matches!(
+            tokens.first(),
+            Some(Token::Identifier(mnemonic)) if mnemonic == "DB" || mnemonic == "DEFB"
+        );
+        let data_label = current_label.clone().or_else(|| active_data_label.clone());
+        let continuation = current_label.is_none() && is_db && active_data_label.is_some();
+        if is_db {
+            if current_label.is_some() {
+                active_data_label = current_label.clone();
+            }
+        } else {
+            active_data_label = None;
+        }
+
+        let known_symbols: HashMap<String, u16> =
+            labels.iter().map(|(k, v)| (k.clone(), v.address)).collect();
+        let bytes = parse_instruction(&tokens, current_pc, &known_symbols, true)
             .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
 
         // Update symbol kind with size if applicable
-        if let Some(label) = current_label {
+        if let Some(label) = data_label {
             if let Some(sym) = labels.get_mut(&label) {
-                // Check if it was identified as Byte or Array or Word
-                // If it's a DB string -> String(len)
-                // If it's a DB multiple bytes -> Array(len)
-                // If it's a DS -> Array(len)
-
                 if let Token::Identifier(mnemonic) = &tokens[0] {
                     match mnemonic.as_str() {
                         "DB" | "DEFB" => {
-                            // Check if operands contain a string literal
-                            if tokens.len() > 1 {
-                                // Simple check for string literal as first operand
-                                // But parsing operands is better.
-                                // Since parse_instruction succeeded, we know operands are valid structure.
-                                // Let's assume passed bytes.len() is correct size.
-
-                                // If instruction size > 1, it's either string or array of bytes.
-                                if bytes.len() > 1 {
-                                    // Check if it is a string literal
-                                    // parse_operands again? It's cheap enough here.
-                                    if let Ok(ops) = parse_operands(&tokens[1..]) {
-                                        if ops.len() == 1 {
-                                            if let Operand::StringLiteral(_) = ops[0] {
-                                                sym.kind = SymbolType::String(bytes.len());
-                                            } else {
-                                                sym.kind = SymbolType::Array(bytes.len());
-                                            }
-                                        } else {
-                                            // Multiple operands: DB 1, 2, 3
-                                            sym.kind = SymbolType::Array(bytes.len());
-                                        }
-                                    }
-                                } else {
-                                    // Single byte, keep as Byte
-                                    sym.kind = SymbolType::Byte;
+                            let contains_string = parse_operands(&tokens[1..])
+                                .map(|ops| {
+                                    ops.iter().any(|op| matches!(op, Operand::StringLiteral(_)))
+                                })
+                                .unwrap_or(false);
+                            let previous_len = if current_label.is_some()
+                                || (continuation && matches!(sym.kind, SymbolType::Label))
+                            {
+                                0
+                            } else {
+                                match sym.kind {
+                                    SymbolType::String(len) | SymbolType::Array(len) => len,
+                                    SymbolType::Byte => 1,
+                                    _ => 0,
                                 }
+                            };
+                            let row_kind = if contains_string {
+                                SymbolType::String(bytes.len())
+                            } else if bytes.len() == 1 {
+                                SymbolType::Byte
+                            } else {
+                                SymbolType::Array(bytes.len())
+                            };
+
+                            if continuation && !matches!(sym.kind, SymbolType::Label) {
+                                let row_name = format!("{}[{}]", label, line_idx + 1);
+                                labels.insert(
+                                    row_name,
+                                    Symbol {
+                                        address: current_pc,
+                                        kind: row_kind,
+                                        source_order: line_idx,
+                                    },
+                                );
+                            } else {
+                                let total_len = previous_len + bytes.len();
+                                sym.kind = if contains_string {
+                                    SymbolType::String(total_len)
+                                } else if total_len == 1 {
+                                    SymbolType::Byte
+                                } else {
+                                    SymbolType::Array(total_len)
+                                };
                             }
                         }
                         "DS" | "DEFS" => {
@@ -175,8 +256,6 @@ pub fn assemble(
     // Pass 2: Code Gen
     let mut output = Vec::new();
     let mut address_to_line = HashMap::new();
-    // In Pass 2 we need a map of String -> u16 for parse_instruction to work.
-    // We can just project our Symbol map.
     let label_addresses: HashMap<String, u16> =
         labels.iter().map(|(k, v)| (k.clone(), v.address)).collect();
 
@@ -187,6 +266,34 @@ pub fn assemble(
         address_to_line.insert(pc, line_idx + 1);
     }
     Ok((output, labels, address_to_line, line_addresses))
+}
+
+fn qualify_label(name: &str, latest_global: Option<&str>) -> Result<String, String> {
+    if let Some(local_name) = name.strip_prefix('.') {
+        if local_name.is_empty() {
+            return Err("Local label cannot be empty".to_string());
+        }
+        if let Some(global_name) = latest_global {
+            return Ok(format!("{}.{}", global_name, local_name));
+        }
+        return Err(format!("Local label '{}' has no global label", name));
+    }
+    Ok(name.to_string())
+}
+
+fn qualify_local_tokens(
+    tokens: &[Token],
+    latest_global: Option<&str>,
+) -> Result<Vec<Token>, String> {
+    tokens
+        .iter()
+        .map(|token| match token {
+            Token::Identifier(name) if name.starts_with('.') => {
+                Ok(Token::Identifier(qualify_label(name, latest_global)?))
+            }
+            token => Ok(token.clone()),
+        })
+        .collect()
 }
 
 fn tokenize(text: &str) -> Result<Vec<Token>, String> {
@@ -235,10 +342,10 @@ fn tokenize(text: &str) -> Result<Vec<Token>, String> {
             c if c.is_whitespace() => {
                 chars.next();
             }
-            c if c.is_alphabetic() || c == '_' => {
+            c if c.is_alphabetic() || c == '_' || c == '.' => {
                 let mut ident = String::new();
                 while let Some(&c) = chars.peek() {
-                    if c.is_alphanumeric() || c == '_' || c == '\'' {
+                    if c.is_alphanumeric() || c == '_' || c == '\'' || c == '.' {
                         ident.push(c);
                         chars.next();
                     } else {
@@ -541,8 +648,8 @@ fn parse_instruction(
         "PUSH" => encode_push(&operands),
         "POP" => encode_pop(&operands),
 
-        "IN" => encode_in(&operands),
-        "OUT" => encode_out(&operands),
+        "IN" => encode_in(&operands, labels, is_dry_run),
+        "OUT" => encode_out(&operands, labels, is_dry_run),
 
         "ORG" => {
             if operands.len() != 1 {
@@ -564,10 +671,6 @@ fn parse_instruction(
                 match op {
                     Operand::Immediate(n) => {
                         if n > 255 {
-                            // If literal is hex 0x12, it's u16.
-                            // But DB 0x12 is valid.
-                            // Check if fits in u8?
-                            // Yes.
                             return Err(format!("Value {} too large for DB", n));
                         }
                         bytes.push(n as u8);
@@ -581,15 +684,12 @@ fn parse_instruction(
                         } else {
                             *labels.get(&l).unwrap_or(&0)
                         };
-                        // Added safety check:
                         if !is_dry_run && val > 255 {
                             return Err(format!(
                                 "Label '{}' value {} is too large for DB (byte)",
                                 l, val
                             ));
                         }
-                        // Use just the low byte? Or error if > 255?
-                        // Usually DB Label puts the low byte.
                         bytes.push((val & 0xFF) as u8);
                     }
                     _ => return Err("Invalid DB operand".to_string()),
@@ -954,13 +1054,6 @@ fn encode_alu_bin(
     dry: bool,
 ) -> Result<Vec<u8>, String> {
     if ops.len() != 1 {
-        // If 2 operands and first is A, strip it?
-        // No, encode_alu_bin assumes the caller handled it if necessary.
-        // But wait, parse_instruction called it with &operands for ADC etc.
-        // If encode_alu_bin fails on len != 1, then parse_instruction handles len=2 specially?
-        // No, parse_instruction just called encode_alu_bin for ADC...
-        // Ah, I missed looking at parse_instruction completely for ADC/SUB.
-        // Let's assume encode_alu_bin handles 2 operands if the first is A.
         if ops.len() == 2 {
             if let Operand::Register(r) = &ops[0] {
                 if r == "A" {
@@ -1282,13 +1375,21 @@ fn encode_ex(ops: &[Operand]) -> Result<Vec<u8>, String> {
     }
 }
 
-fn encode_in(ops: &[Operand]) -> Result<Vec<u8>, String> {
+fn encode_in(ops: &[Operand], labels: &HashMap<String, u16>, dry: bool) -> Result<Vec<u8>, String> {
     if ops.len() != 2 {
         return Err("IN 2 ops".to_string());
     }
     match (&ops[0], &ops[1]) {
-        (Operand::Register(r), Operand::IndirectImmediate(n)) if r == "A" => {
-            Ok(vec![0xDB, *n as u8])
+        (Operand::Register(r), op) if r == "A" => {
+            if matches!(
+                op,
+                Operand::IndirectImmediate(_) | Operand::IndirectLabel(_)
+            ) {
+                let port = resolve_indirect(op, labels, dry)?;
+                Ok(vec![0xDB, port as u8])
+            } else {
+                Err("Invalid IN form".to_string())
+            }
         }
         (Operand::Register(r), Operand::IndirectRegister(ir)) if ir == "C" => {
             if let Some(rc) = get_r_code(r) {
@@ -1300,13 +1401,25 @@ fn encode_in(ops: &[Operand]) -> Result<Vec<u8>, String> {
         _ => Err("Invalid IN form".to_string()),
     }
 }
-fn encode_out(ops: &[Operand]) -> Result<Vec<u8>, String> {
+fn encode_out(
+    ops: &[Operand],
+    labels: &HashMap<String, u16>,
+    dry: bool,
+) -> Result<Vec<u8>, String> {
     if ops.len() != 2 {
         return Err("OUT 2 ops".to_string());
     }
     match (&ops[0], &ops[1]) {
-        (Operand::IndirectImmediate(n), Operand::Register(r)) if r == "A" => {
-            Ok(vec![0xD3, *n as u8])
+        (op, Operand::Register(r)) if r == "A" => {
+            if matches!(
+                op,
+                Operand::IndirectImmediate(_) | Operand::IndirectLabel(_)
+            ) {
+                let port = resolve_indirect(op, labels, dry)?;
+                Ok(vec![0xD3, port as u8])
+            } else {
+                Err("Invalid OUT form".to_string())
+            }
         }
         (Operand::IndirectRegister(ir), Operand::Register(r)) if ir == "C" => {
             if let Some(rc) = get_r_code(r) {

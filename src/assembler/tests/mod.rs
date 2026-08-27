@@ -177,6 +177,24 @@ fn test_parse_operands_labels_conditions() {
 }
 
 #[test]
+fn test_local_labels_use_latest_global_scope() {
+    let (bytes, symbols, _, _) =
+        assemble("FOO: JP .DONE\n.BODY: NOP\n.DONE: JP .BODY\nBAR: JP .DONE\n.DONE: NOP").unwrap();
+
+    assert_eq!(
+        bytes,
+        vec![
+            0xC3, 0x04, 0x00, 0x00, 0xC3, 0x03, 0x00, 0xC3, 0x0A, 0x00, 0x00
+        ]
+    );
+    assert_eq!(symbols["FOO"].address, 0);
+    assert_eq!(symbols["FOO.DONE"].address, 4);
+    assert_eq!(symbols["FOO.BODY"].address, 3);
+    assert_eq!(symbols["BAR"].address, 7);
+    assert_eq!(symbols["BAR.DONE"].address, 10);
+}
+
+#[test]
 fn test_parse_operands_errors() {
     assert!(parse_operands(&tokenize("A B").unwrap()).is_err()); // missing comma
     assert!(parse_operands(&tokenize("-").unwrap()).is_err()); // minus no number

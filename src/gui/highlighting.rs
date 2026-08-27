@@ -53,14 +53,20 @@ pub fn highlight(
             egui::Color32::TRANSPARENT
         };
 
-        // If line contains ; anywhere, split it
-        let (code_part, comment_part) = if let Some(idx) = line.find(';') {
+        let comment_index = line.char_indices().find_map(|(index, character)| {
+            if character == ';' {
+                let quote_count = line[..index].chars().filter(|&c| c == '"').count();
+                (quote_count % 2 == 0).then_some(index)
+            } else {
+                None
+            }
+        });
+        let (code_part, comment_part) = if let Some(idx) = comment_index {
             (&line[..idx], Some(&line[idx..]))
         } else {
             (line, None)
         };
 
-        // Helper to determine color
         let get_color = |token: &str| -> egui::Color32 {
             let upper = token.to_uppercase();
             // Remove trailing commas for checking
@@ -97,10 +103,26 @@ pub fn highlight(
             }
         };
 
-        // Split by delimiters
         let mut start_token = None;
 
+        let mut in_string = false;
+        let mut string_quote = '\0';
+
         for (i, c) in code_part.char_indices() {
+            if in_string {
+                if c == string_quote {
+                    in_string = false;
+                }
+                continue;
+            }
+
+            if (c == '"' || c == '\'') && start_token.is_none() {
+                start_token = Some(i);
+                in_string = true;
+                string_quote = c;
+                continue;
+            }
+
             let is_delimiter =
                 c.is_whitespace() || c == ',' || c == '(' || c == ')' || c == '+' || c == '-';
 
@@ -120,7 +142,6 @@ pub fn highlight(
                     );
                     start_token = None;
                 }
-                // Append the delimiter itself
                 job.append(
                     &code_part[i..i + c.len_utf8()],
                     0.0,
@@ -138,7 +159,6 @@ pub fn highlight(
             }
         }
 
-        // Flush last token
         if let Some(start) = start_token {
             let token = &code_part[start..];
             let color = get_color(token);
@@ -154,7 +174,6 @@ pub fn highlight(
             );
         }
 
-        // Add the comment part if it exists
         if let Some(comment) = comment_part {
             job.append(
                 comment,
@@ -168,7 +187,6 @@ pub fn highlight(
             );
         }
 
-        // Newline
         job.append(
             "\n",
             0.0,
@@ -178,30 +196,6 @@ pub fn highlight(
                 ..Default::default()
             },
         );
-    }
-
-    // Remove the very last newline we just added to prevent extra space?
-    // Actually TextEdit usually handles newlines well, but LayoutJob might be strict.
-    // If the input doesn't end in newline, we added one.
-    // If input code is empty, we handle it.
-
-    // Quick fix: loop adds \n for every line. Split lines removes \n.
-    // If original string didn't have \n at end, we shouldn't add?
-    // But text edit needs consistent lines.
-
-    // Let's strip the last \n if the original code didn't have one?
-    // Doing strict per-character reconstruction is safer but harder.
-    // simpler: The loop above adds \n at end of every line.
-    // split lines eats the newline.
-    // if code ended with newline, `lines()` might not give empty string at end if not careful.
-    // Actually `lines()` ignores final newline.
-    // Let's just trust egui to render.
-
-    if !code.ends_with('\n') && !job.sections.is_empty() {
-        // If the original text didn't end with newline, we might have added one
-        // in the loop.
-        // We can't easily pop from LayoutJob text.
-        // But for editor usage, having a trialing newline is usually fine visually.
     }
 
     job
