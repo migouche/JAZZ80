@@ -139,16 +139,20 @@ pub struct Z80App {
     is_assembly_stale: bool,
 }
 
+const APP_ID: &str = "jazz80-simulator";
+const APP_NAME: &str = "JAZZ80 - Z80 Simulator";
+const STORAGE_KEY: &str = "z80_workspace";
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_app_id("z80-simulator")
+            .with_app_id(APP_ID)
             .with_inner_size([1280.0, 720.0]),
         ..Default::default()
     };
     eframe::run_native(
-        "Z80 Simulator",
+        APP_NAME,
         options,
         Box::new(|cc| Ok(Box::new(Z80App::new(cc)))),
     )
@@ -288,14 +292,14 @@ START:
 
     fn save_to_storage(&self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
         if let Some(storage) = storage {
-            eframe::set_value(storage, "z80_workspace", self);
+            eframe::set_value(storage, STORAGE_KEY, self);
             storage.flush();
         }
     }
 
     pub fn new(cc: &eframe::CreationContext) -> Self {
         let mut app = if let Some(storage) = cc.storage {
-            match eframe::get_value::<Z80App>(storage, "z80_workspace") {
+            match eframe::get_value::<Z80App>(storage, STORAGE_KEY) {
                 Some(mut loaded_app) => {
                     if loaded_app.tabs.is_empty() {
                         loaded_app.tabs.push(EditorTab {
@@ -1611,7 +1615,8 @@ impl eframe::App for Z80App {
                             ui.spacing_mut().item_spacing.y = 0.0;
 
                             // Header for Line
-                            ui.label(egui::RichText::new("Line").font(font_id.clone()).strong().color(egui::Color32::GRAY));
+                            ui.label(egui::RichText::new("Line").
+                                font(font_id.clone()).strong().color(egui::Color32::GRAY));
 
                             for i in 1..=num_lines {
                                 let is_bp = current_tab.breakpoints.contains(&i);
@@ -1659,7 +1664,8 @@ impl eframe::App for Z80App {
                             // Address Column
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 0.0;
-                                ui.label(egui::RichText::new("Address").font(font_id.clone()).strong().color(egui::Color32::GRAY));
+                                ui.label(egui::RichText::new("Address").
+                                font(font_id.clone()).strong().color(egui::Color32::GRAY));
 
                                 let addr_color = if self.is_assembly_stale {
                                     egui::Color32::from_rgb(180, 150, 80)
