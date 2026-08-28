@@ -9,6 +9,7 @@ use crate::components::memories::mem_64k::Mem64k;
 use crate::cpu::{Flag, GPR, Z80A};
 use crate::traits::{MemoryMapper, SyncronousComponent};
 
+use crate::components::devices::DeviceDefinition;
 use crate::ui_traits::DeviceWithUi;
 
 mod highlighting;
@@ -46,21 +47,11 @@ enum HeaderAction {
     Quit,
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum DeviceType {
-    Keypad,
-    SevenSegment,
-    LcdDisplay,
-    GenericInterrupt,
-    NmiTrigger,
-    VirtualTerminal,
-}
-
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 enum ModalType {
     CloseTab(usize),
     Quit,
-    AddDevice(DeviceType, String),
+    AddDevice(&'static DeviceDefinition, String),
 }
 
 #[derive(Clone, Copy, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -245,7 +236,9 @@ START:
         let memory: Rc<RefCell<dyn MemoryMapper>> = Rc::new(RefCell::new(Mem64k::new()));
         self.memory = memory.clone();
         self.cpu = Z80A::new(self.memory.clone());
-        self.attached_devices.clear();
+        for device in &self.attached_devices {
+            self.cpu.attach_device(device.clone());
+        }
 
         self.is_running = false;
 
@@ -766,69 +759,18 @@ impl eframe::App for Z80App {
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
 
                 ui.menu_button("Devices", |ui| {
-                    if ui
-                        .button("Add Keypad")
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .clicked()
-                    {
-                        self.pending_modal =
-                            Some(ModalType::AddDevice(DeviceType::Keypad, "1".to_string()));
-                        ui.close();
-                    }
-                    if ui
-                        .button("Add Display")
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .clicked()
-                    {
-                        self.pending_modal = Some(ModalType::AddDevice(
-                            DeviceType::SevenSegment,
-                            "2".to_string(),
-                        ));
-                        ui.close();
-                    }
-                    if ui
-                        .button("Add LCD Display")
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .clicked()
-                    {
-                        self.pending_modal = Some(ModalType::AddDevice(
-                            DeviceType::LcdDisplay,
-                            "3".to_string(),
-                        ));
-                        ui.close();
-                    }
-                    if ui
-                        .button("Add Interrupt Controller")
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .clicked()
-                    {
-                        self.pending_modal = Some(ModalType::AddDevice(
-                            DeviceType::GenericInterrupt,
-                            "0".to_string(),
-                        ));
-                        ui.close();
-                    }
-                    if ui
-                        .button("Add Virtual Terminal")
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .clicked()
-                    {
-                        self.pending_modal = Some(ModalType::AddDevice(
-                            DeviceType::VirtualTerminal,
-                            "0".to_string(),
-                        ));
-                        ui.close();
-                    }
-                    if ui
-                        .button("Add NMI Trigger")
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .clicked()
-                    {
-                        self.pending_modal = Some(ModalType::AddDevice(
-                            DeviceType::NmiTrigger,
-                            "0".to_string(),
-                        ));
-                        ui.close();
+                    for definition in crate::components::devices::device_definitions() {
+                        if ui
+                            .button(definition.menu_name)
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked()
+                        {
+                            self.pending_modal = Some(ModalType::AddDevice(
+                                definition,
+                                definition.default_port.to_string(),
+                            ));
+                            ui.close();
+                        }
                     }
 
                     if !self.attached_devices.is_empty() {
@@ -1958,11 +1900,7 @@ impl eframe::App for Z80App {
                 .open(&mut open)
                 .show(ui, |ui| {
                     match &mut modal_type {
-                        ModalType::AddDevice(dev_type, port_text) => {
-                            use crate::components::devices::{
-                                GenericInterruptDevice, Keypad, LcdDisplay, SevenSegmentDisplay,
-                                VirtualTerminal,
-                            };
+                        ModalType::AddDevice(definition, port_text) => {
                             ui.label("Enter Port Number (Hex):");
                             ui.text_edit_singleline(port_text);
 
@@ -1976,28 +1914,7 @@ impl eframe::App for Z80App {
                                     let port_res = u16::from_str_radix(port_text, 16);
                                     match port_res {
                                         Ok(port) => {
-                                            let dev: Rc<RefCell<dyn DeviceWithUi>> = match dev_type
-                                            {
-                                                DeviceType::Keypad => {
-                                                    Rc::new(RefCell::new(Keypad::new(port)))
-                                                }
-                                                DeviceType::SevenSegment => Rc::new(RefCell::new(
-                                                    SevenSegmentDisplay::new(port),
-                                                )),
-                                                DeviceType::LcdDisplay => {
-                                                    Rc::new(RefCell::new(LcdDisplay::new(port)))
-                                                }
-                                                DeviceType::VirtualTerminal => Rc::new(
-                                                    RefCell::new(VirtualTerminal::new(port)),
-                                                ),
-                                                DeviceType::GenericInterrupt => Rc::new(
-                                                    RefCell::new(GenericInterruptDevice::new(port)),
-                                                ),
-                                                DeviceType::NmiTrigger => Rc::new(RefCell::new(
-                                                    crate::components::nmi_trigger::NmiTrigger::new(
-                                                    ),
-                                                )),
-                                            };
+                                            let dev = (definition.create)(port);
                                             self.cpu.attach_device(dev.clone());
                                             self.attached_devices.push(dev);
                                             should_close_modal = true;

@@ -2,6 +2,9 @@
 
 TERM_DATA      EQU 00h
 TERM_STATUS    EQU 01h
+FS_DATA        EQU 20h
+FS_CMD         EQU 21h
+FS_STATUS      EQU 22h
 CMD_BUFFER     EQU 4000h
 CMD_BUFFER_END EQU 4040h
 
@@ -111,28 +114,104 @@ EXECUTE_COMMAND:
     CP 48h
     JR Z, .CHECK_HELP
     CP 43h
-    JR Z, .CHECK_CLEAR
-    JR .UNKNOWN
+    JR Z, .CHECK_C_COMMANDS
+    CP 4Ch
+    JR Z, .CHECK_LS
+    CP 4Dh
+    JR Z, .CHECK_MKDIR
+    JP .UNKNOWN
+
+.CHECK_C_COMMANDS:
+    INC HL
+    LD A, (HL)
+    CP 4Ch
+    JP Z, .CHECK_CLEAR
+    CP 44h
+    JR Z, .CHECK_CD
+    JP .UNKNOWN
 
 .CHECK_HELP:
     INC HL
     LD A, (HL)
     CP 45h
-    JR NZ, .UNKNOWN
+    JP NZ, .UNKNOWN
     INC HL
     LD A, (HL)
     CP 4Ch
-    JR NZ, .UNKNOWN
+    JP NZ, .UNKNOWN
     INC HL
     LD A, (HL)
     CP 50h
+    JP NZ, .UNKNOWN
+    INC HL
+    LD A, (HL)
+    OR A
+    JP NZ, .UNKNOWN
+    LD HL, MSG_HELP
+    CALL PRINT_STRING
+    RET
+
+.CHECK_LS:
+    INC HL
+    LD A, (HL)
+    CP 53h
     JR NZ, .UNKNOWN
     INC HL
     LD A, (HL)
     OR A
     JR NZ, .UNKNOWN
-    LD HL, MSG_HELP
+
+    LD A, 03h
+    OUT (FS_CMD), A
+.LS_PUMP:
+    IN A, (FS_STATUS)
+    CP 02h
+    RET NZ
+    IN A, (FS_DATA)
+    CALL PRINT_CHAR
+    JR .LS_PUMP
+
+.CHECK_CD:
+    INC HL
+    LD A, (HL)
+    CP 20h
+    JR NZ, .UNKNOWN
+    INC HL
+    CALL SEND_FS_ARGS
+    LD A, 02h
+    OUT (FS_CMD), A
+    IN A, (FS_STATUS)
+    CP 01h
+    RET NZ
+    LD HL, MSG_DIR_ERR
     CALL PRINT_STRING
+    RET
+
+.CHECK_MKDIR:
+    INC HL
+    LD A, (HL)
+    CP 4Bh
+    JR NZ, .UNKNOWN
+    INC HL
+    LD A, (HL)
+    CP 44h
+    JR NZ, .UNKNOWN
+    INC HL
+    LD A, (HL)
+    CP 49h
+    JR NZ, .UNKNOWN
+    INC HL
+    LD A, (HL)
+    CP 52h
+    JR NZ, .UNKNOWN
+    INC HL
+    LD A, (HL)
+    CP 20h
+    JR NZ, .UNKNOWN
+    INC HL
+    CALL SEND_FS_ARGS
+    LD A, 01h
+    OUT (FS_CMD), A
     RET
 
 .CHECK_CLEAR:
@@ -165,6 +244,17 @@ EXECUTE_COMMAND:
     CALL PRINT_STRING
     RET
 
+SEND_FS_ARGS:
+    LD A, 00h
+    OUT (FS_CMD), A
+.SEND_FS_ARGS_LOOP:
+    LD A, (HL)
+    OR A
+    RET Z
+    OUT (FS_DATA), A
+    INC HL
+    JR .SEND_FS_ARGS_LOOP
+
 MSG_BANNER: DB "JAZZ80 MONITOR", 0Dh, 0Ah, 0
 MSG_PROMPT:
     DB "> ", 0
@@ -172,8 +262,13 @@ MSG_NEWLINE:
     DB 0Dh, 0Ah, 0
 MSG_HELP:
     DB "HELP - show commands", 0Dh, 0Ah
-    DB "CLEAR - clear the terminal", 0Dh, 0Ah, 0
+    DB "CLEAR - clear the terminal", 0Dh, 0Ah
+    DB "CD <dir> - change directory", 0Dh, 0Ah
+    DB "LS - list directory", 0Dh, 0Ah
+    DB "MKDIR <dir> - create directory", 0Dh, 0Ah, 0
 MSG_CLEAR:
     DB 1Bh, "[2J", 1Bh, "[H", 0
 MSG_UNKNOWN:
     DB "Unknown command", 0Dh, 0Ah, 0
+MSG_DIR_ERR:
+    DB "Directory not found", 0Dh, 0Ah, 0

@@ -1,7 +1,85 @@
+use super::nmi_trigger::NmiTrigger;
 use crate::traits::IODevice;
 use crate::ui_traits::DeviceWithUi;
 use eframe::egui;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::rc::Rc;
+
+pub struct DeviceDefinition {
+    pub menu_name: &'static str,
+    pub default_port: &'static str,
+    pub create: fn(u16) -> Rc<RefCell<dyn DeviceWithUi>>,
+}
+
+fn create_keypad(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
+    Rc::new(RefCell::new(Keypad::new(port)))
+}
+
+fn create_display(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
+    Rc::new(RefCell::new(SevenSegmentDisplay::new(port)))
+}
+
+fn create_lcd_display(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
+    Rc::new(RefCell::new(LcdDisplay::new(port)))
+}
+
+fn create_interrupt_controller(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
+    Rc::new(RefCell::new(GenericInterruptDevice::new(port)))
+}
+
+fn create_virtual_terminal(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
+    Rc::new(RefCell::new(VirtualTerminal::new(port)))
+}
+
+fn create_virtual_file_system(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
+    Rc::new(RefCell::new(VirtualDOS::new(port)))
+}
+
+fn create_nmi_trigger(_port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
+    Rc::new(RefCell::new(NmiTrigger::new()))
+}
+
+pub fn device_definitions() -> &'static [DeviceDefinition] {
+    &[
+        DeviceDefinition {
+            menu_name: "Add Keypad",
+            default_port: "1",
+            create: create_keypad,
+        },
+        DeviceDefinition {
+            menu_name: "Add Display",
+            default_port: "2",
+            create: create_display,
+        },
+        DeviceDefinition {
+            menu_name: "Add LCD Display",
+            default_port: "3",
+            create: create_lcd_display,
+        },
+        DeviceDefinition {
+            menu_name: "Add Interrupt Controller",
+            default_port: "0",
+            create: create_interrupt_controller,
+        },
+        DeviceDefinition {
+            menu_name: "Add Virtual Terminal",
+            default_port: "0",
+            create: create_virtual_terminal,
+        },
+        DeviceDefinition {
+            menu_name: "Add DOS Controller",
+            default_port: "20",
+            create: create_virtual_file_system,
+        },
+        DeviceDefinition {
+            menu_name: "Add NMI Trigger",
+            default_port: "0",
+            create: create_nmi_trigger,
+        },
+    ]
+}
 
 pub struct SevenSegmentDisplay {
     port: u16,
@@ -549,6 +627,189 @@ impl DeviceWithUi for VirtualTerminal {
                         response.request_focus(); // Keep focus so you can keep typing
                     }
                 });
+            });
+        self.is_open = open;
+    }
+}
+
+#[derive(Clone)]
+enum Inode {
+    File(Vec<u8>),
+    Directory,
+}
+
+pub struct VirtualDOS {
+    port: u16,
+    fs: HashMap<String, Inode>,
+    cwd: String,
+
+    // Hardware communication buffers
+    arg_buffer: String,
+    out_queue: VecDeque<u8>,
+    status: u8, // 0 = OK, 1 = Error, 2 = Data Ready
+    is_open: bool,
+}
+
+impl VirtualDOS {
+    pub fn new(port: u16) -> Self {
+        let mut fs = HashMap::new();
+        fs.insert("/".to_string(), Inode::Directory); // Root always exists
+
+        Self {
+            port,
+            fs,
+            cwd: "/".to_string(),
+            arg_buffer: String::new(),
+            out_queue: VecDeque::new(),
+            status: 0,
+            is_open: true,
+        }
+    }
+
+    // Helper to resolve paths like "FOO", "../BAR", or "/ROOT"
+    fn resolve_path(&self, path: &str) -> String {
+        let path = path.trim();
+        if path == "/" {
+            return "/".to_string();
+        }
+
+        let mut parts: Vec<&str> = if path.starts_with('/') {
+            Vec::new()
+        } else {
+            self.cwd.split('/').filter(|s| !s.is_empty()).collect()
+        };
+
+        for p in path.split('/') {
+            match p {
+                "" | "." => continue,
+                ".." => {
+                    parts.pop();
+                }
+                _ => parts.push(p),
+            }
+        }
+
+        if parts.is_empty() {
+            return "/".to_string();
+        }
+        format!("/{}", parts.join("/"))
+    }
+}
+
+impl IODevice for VirtualDOS {
+    fn read_in(&mut self, port: u16) -> Option<u8> {
+        let p = port & 0xFF;
+        let base = self.port & 0xFF;
+
+        if p == base {
+            // Read output data (e.g., from an LS command)
+            if let Some(b) = self.out_queue.pop_front() {
+                if self.out_queue.is_empty() {
+                    self.status = 0;
+                } // Clear Data Ready flag
+                Some(b)
+            } else {
+                Some(0)
+            }
+        } else if p == base.wrapping_add(2) {
+            // Read Status (0=OK, 1=Error, 2=Data Ready)
+            Some(self.status)
+        } else {
+            None
+        }
+    }
+
+    fn write_out(&mut self, port: u16, data: u8) -> bool {
+        let p = port & 0xFF;
+        let base = self.port & 0xFF;
+
+        if p == base {
+            // Push to argument buffer
+            self.arg_buffer.push(data as char);
+            true
+        } else if p == base.wrapping_add(1) {
+            // Execute Command
+            match data {
+                0 => {
+                    // Clear Buffer
+                    self.arg_buffer.clear();
+                    self.out_queue.clear();
+                    self.status = 0;
+                }
+                1 => {
+                    // MKDIR
+                    let target = self.resolve_path(&self.arg_buffer);
+                    self.fs.insert(target, Inode::Directory);
+                    self.status = 0;
+                }
+                2 => {
+                    // CD
+                    let target = self.resolve_path(&self.arg_buffer);
+                    if let Some(Inode::Directory) = self.fs.get(&target) {
+                        self.cwd = target;
+                        self.status = 0;
+                    } else {
+                        self.status = 1; // Error: Not a directory
+                    }
+                }
+                3 => {
+                    // LS
+                    let mut listing = String::new();
+                    let prefix = if self.cwd == "/" {
+                        "/".to_string()
+                    } else {
+                        format!("{}/", self.cwd)
+                    };
+
+                    for (path, inode) in &self.fs {
+                        if path.starts_with(&prefix) {
+                            let remainder = &path[prefix.len()..];
+                            // Only list direct children, not subdirectories
+                            if !remainder.contains('/') && !remainder.is_empty() {
+                                let label = match inode {
+                                    Inode::Directory => "[DIR] ",
+                                    Inode::File(_) => "[FILE]",
+                                };
+                                listing.push_str(&format!("{} {}\r\n", label, remainder));
+                            }
+                        }
+                    }
+                    if listing.is_empty() {
+                        listing.push_str("Empty\r\n");
+                    }
+
+                    self.out_queue.extend(listing.bytes());
+                    self.status = if self.out_queue.is_empty() { 0 } else { 2 }; // Set Data Ready
+                }
+                _ => {}
+            }
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl DeviceWithUi for VirtualDOS {
+    fn get_name(&self) -> String {
+        format!("DOS Controller (Port 0x{:02X})", self.port & 0xFF)
+    }
+    fn get_window_open_state(&self) -> bool {
+        self.is_open
+    }
+    fn set_window_open_state(&mut self, open: bool) {
+        self.is_open = open;
+    }
+
+    fn draw(&mut self, ctx: &egui::Context) {
+        let mut open = self.is_open;
+        egui::Window::new(self.get_name())
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(format!("CWD: {}", self.cwd));
+                ui.separator();
+                ui.label(format!("Arg Buffer: '{}'", self.arg_buffer));
+                ui.label(format!("Status Code: {}", self.status));
             });
         self.is_open = open;
     }
