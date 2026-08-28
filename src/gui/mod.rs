@@ -652,7 +652,8 @@ impl eframe::App for Z80App {
         eframe::set_value(storage, "z80_workspace", self);
     }
 
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         #[cfg(target_arch = "wasm32")]
         {
             if let Some(receiver) = self.file_receiver.take() {
@@ -679,10 +680,10 @@ impl eframe::App for Z80App {
             }
         }
 
-        let mut action = self.check_shortcuts(ctx);
+        let mut action = self.check_shortcuts(&ctx);
 
         // Top Panel: Menu Bar and Control Toolbar
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+        egui::Panel::top("top_panel").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui
@@ -986,10 +987,10 @@ impl eframe::App for Z80App {
         // No, let's process actions first. but Tab Bar is part of Central Panel UI.
 
         // Right Panel: Registers and Flags
-        egui::SidePanel::right("right_panel")
+        egui::Panel::right("right_panel")
             .resizable(true)
-            .default_width(280.0)
-            .show(ctx, |ui| {
+            .default_size(280.0)
+            .show(ui, |ui| {
                 ui.heading("Registers");
                 ui.separator();
 
@@ -1182,10 +1183,10 @@ impl eframe::App for Z80App {
         let mut sorted_symbols: Vec<_> = self.symbol_table.iter().collect();
         sorted_symbols.sort_by_key(|item| item.1.source_order);
 
-        egui::SidePanel::right("vars_panel")
+        egui::Panel::right("vars_panel")
             .resizable(true)
-            .default_width(280.0)
-            .show(ctx, |ui| {
+            .default_size(280.0)
+            .show(ui, |ui| {
                 ui.heading("Variables");
                 ui.separator();
 
@@ -1474,7 +1475,7 @@ impl eframe::App for Z80App {
             });
 
         // Central Panel: Code Editor
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             // Tab Bar
             ui.horizontal(|ui| {
                 egui::ScrollArea::horizontal()
@@ -1955,7 +1956,7 @@ impl eframe::App for Z80App {
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .open(&mut open)
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     match &mut modal_type {
                         ModalType::AddDevice(dev_type, port_text) => {
                             use crate::components::devices::{
@@ -2194,7 +2195,7 @@ impl eframe::App for Z80App {
                 .resizable(true)
                 .default_width(500.0)
                 .default_height(400.0)
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Start Address (Hex):");
                         let response = ui.add(
@@ -2256,7 +2257,7 @@ impl eframe::App for Z80App {
 
         // Draw separate windows for devices
         for device in &self.attached_devices {
-            device.borrow_mut().draw(ctx);
+            device.borrow_mut().draw(&ctx);
         }
     }
 }
