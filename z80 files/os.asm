@@ -111,56 +111,109 @@ EXECUTE_COMMAND:
     OR A
     RET Z
 
-    CP 48h
-    JR Z, .CHECK_HELP
-    CP 43h
-    JR Z, .CHECK_C_COMMANDS
-    CP 4Ch
-    JR Z, .CHECK_LS
-    CP 4Dh
-    JR Z, .CHECK_MKDIR
-    JP .UNKNOWN
+    LD IX, CMD_TABLE
 
-.CHECK_C_COMMANDS:
-    INC HL
-    LD A, (HL)
-    CP 4Ch
-    JP Z, .CHECK_CLEAR
-    CP 44h
-    JR Z, .CHECK_CD
-    JP .UNKNOWN
+.NEXT:
+    LD E, (IX+0)
+    LD D, (IX+1)
 
-.CHECK_HELP:
-    INC HL
-    LD A, (HL)
-    CP 45h
-    JP NZ, .UNKNOWN
-    INC HL
-    LD A, (HL)
-    CP 4Ch
-    JP NZ, .UNKNOWN
-    INC HL
-    LD A, (HL)
-    CP 50h
-    JP NZ, .UNKNOWN
-    INC HL
-    LD A, (HL)
+    LD A, D
+    OR E
+    JP Z, .UNKNOWN
+
+    PUSH HL
+    LD A, (IX+4)
     OR A
-    JP NZ, .UNKNOWN
+    JP Z, .COMPARE_EXACT
+    CALL STR_PREFIX
+    JP .COMPARE_RESULT
+.COMPARE_EXACT:
+    CALL STR_EQ
+.COMPARE_RESULT:
+    JP Z, .FOUND
+    POP HL
+
+    INC IX
+    INC IX
+    INC IX
+    INC IX
+    INC IX
+    INC IX
+    JP .NEXT
+
+.FOUND:
+    POP DE
+    LD E, (IX+2)
+    LD D, (IX+3)
+    PUSH DE
+    RET
+
+.UNKNOWN:
+    LD HL, MSG_UNKNOWN
+    CALL PRINT_STRING
+    RET
+
+STR_EQ:
+.LOOP:
+    LD A, (DE)
+    CP (HL)
+    JP NZ, .NO_MATCH
+    OR A
+    JP Z, .MATCH
+    INC HL
+    INC DE
+    JP .LOOP
+
+.NO_MATCH:
+    RET
+
+.MATCH:
+    RET
+
+STR_PREFIX:
+.LOOP:
+    LD A, (DE)
+    OR A
+    RET Z
+    CP (HL)
+    JP NZ, .NO_MATCH
+    INC HL
+    INC DE
+    JP .LOOP
+
+.NO_MATCH:
+    RET
+
+CMD_TABLE:
+    DW CMD_HELP_STR, CMD_HELP, 0000h
+    DW CMD_CLEAR_STR, CMD_CLEAR, 0000h
+    DW CMD_LS_STR, CMD_LS, 0000h
+    DW CMD_CD_STR, CMD_CD, 0001h
+    DW CMD_MKDIR_STR, CMD_MKDIR, 0001h
+    DW 0000h, 0000h, 0000h
+
+CMD_HELP_STR:
+    DB "HELP", 0
+CMD_CLEAR_STR:
+    DB "CLEAR", 0
+CMD_LS_STR:
+    DB "LS", 0
+CMD_CD_STR:
+    DB "CD ", 0
+CMD_MKDIR_STR:
+    DB "MKDIR ", 0
+
+CMD_HELP:
     LD HL, MSG_HELP
     CALL PRINT_STRING
     RET
 
-.CHECK_LS:
-    INC HL
-    LD A, (HL)
-    CP 53h
-    JR NZ, .UNKNOWN
-    INC HL
-    LD A, (HL)
-    OR A
-    JR NZ, .UNKNOWN
+CMD_CLEAR:
+    LD HL, MSG_CLEAR
+    CALL PRINT_STRING
+    RET
 
+CMD_LS:
     LD A, 03h
     OUT (FS_CMD), A
 .LS_PUMP:
@@ -171,12 +224,7 @@ EXECUTE_COMMAND:
     CALL PRINT_CHAR
     JR .LS_PUMP
 
-.CHECK_CD:
-    INC HL
-    LD A, (HL)
-    CP 20h
-    JR NZ, .UNKNOWN
-    INC HL
+CMD_CD:
     CALL SEND_FS_ARGS
     LD A, 02h
     OUT (FS_CMD), A
@@ -187,61 +235,10 @@ EXECUTE_COMMAND:
     CALL PRINT_STRING
     RET
 
-.CHECK_MKDIR:
-    INC HL
-    LD A, (HL)
-    CP 4Bh
-    JR NZ, .UNKNOWN
-    INC HL
-    LD A, (HL)
-    CP 44h
-    JR NZ, .UNKNOWN
-    INC HL
-    LD A, (HL)
-    CP 49h
-    JR NZ, .UNKNOWN
-    INC HL
-    LD A, (HL)
-    CP 52h
-    JR NZ, .UNKNOWN
-    INC HL
-    LD A, (HL)
-    CP 20h
-    JR NZ, .UNKNOWN
-    INC HL
+CMD_MKDIR:
     CALL SEND_FS_ARGS
     LD A, 01h
     OUT (FS_CMD), A
-    RET
-
-.CHECK_CLEAR:
-    INC HL
-    LD A, (HL)
-    CP 4Ch
-    JR NZ, .UNKNOWN
-    INC HL
-    LD A, (HL)
-    CP 45h
-    JR NZ, .UNKNOWN
-    INC HL
-    LD A, (HL)
-    CP 41h
-    JR NZ, .UNKNOWN
-    INC HL
-    LD A, (HL)
-    CP 52h
-    JR NZ, .UNKNOWN
-    INC HL
-    LD A, (HL)
-    OR A
-    JR NZ, .UNKNOWN
-    LD HL, MSG_CLEAR
-    CALL PRINT_STRING
-    RET
-
-.UNKNOWN:
-    LD HL, MSG_UNKNOWN
-    CALL PRINT_STRING
     RET
 
 SEND_FS_ARGS:
@@ -255,7 +252,8 @@ SEND_FS_ARGS:
     INC HL
     JR .SEND_FS_ARGS_LOOP
 
-MSG_BANNER: DB "JAZZ80 MONITOR", 0Dh, 0Ah, 0
+MSG_BANNER:
+	DB "JAZZ80 MONITOR", 0Dh, 0Ah, 0
 MSG_PROMPT:
     DB "> ", 0
 MSG_NEWLINE:

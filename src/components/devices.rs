@@ -6,6 +6,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::rc::Rc;
+#[cfg(target_arch = "wasm32")]
+use std::sync::mpsc::{self, Receiver};
 
 pub struct DeviceDefinition {
     pub menu_name: &'static str,
@@ -630,6 +632,13 @@ impl DeviceWithUi for VirtualTerminal {
             });
         self.is_open = open;
     }
+
+    fn reset(&mut self) {
+        self.rx_queue.clear();
+        self.tx_buffer.clear();
+        self.control_sequence.clear();
+        self.input_string.clear();
+    }
 }
 
 #[derive(Clone)]
@@ -642,12 +651,16 @@ pub struct VirtualDOS {
     port: u16,
     fs: HashMap<String, Inode>,
     cwd: String,
+    gui_cwd: String,
 
     // Hardware communication buffers
     arg_buffer: String,
     out_queue: VecDeque<u8>,
     status: u8, // 0 = OK, 1 = Error, 2 = Data Ready
     is_open: bool,
+    new_directory: String,
+    #[cfg(target_arch = "wasm32")]
+    upload_receiver: Option<Receiver<(String, Vec<u8>)>>,
 }
 
 impl VirtualDOS {
@@ -659,15 +672,19 @@ impl VirtualDOS {
             port,
             fs,
             cwd: "/".to_string(),
+            gui_cwd: "/".to_string(),
             arg_buffer: String::new(),
             out_queue: VecDeque::new(),
             status: 0,
             is_open: true,
+            new_directory: String::new(),
+            #[cfg(target_arch = "wasm32")]
+            upload_receiver: None,
         }
     }
 
     // Helper to resolve paths like "FOO", "../BAR", or "/ROOT"
-    fn resolve_path(&self, path: &str) -> String {
+    fn resolve_path_from(&self, path: &str, cwd: &str) -> String {
         let path = path.trim();
         if path == "/" {
             return "/".to_string();
@@ -676,7 +693,7 @@ impl VirtualDOS {
         let mut parts: Vec<&str> = if path.starts_with('/') {
             Vec::new()
         } else {
-            self.cwd.split('/').filter(|s| !s.is_empty()).collect()
+            cwd.split('/').filter(|s| !s.is_empty()).collect()
         };
 
         for p in path.split('/') {
@@ -693,6 +710,85 @@ impl VirtualDOS {
             return "/".to_string();
         }
         format!("/{}", parts.join("/"))
+    }
+
+    fn resolve_path(&self, path: &str) -> String {
+        self.resolve_path_from(path, &self.cwd)
+    }
+
+    fn child_path(&self, name: &str) -> String {
+        self.resolve_path_from(name.trim_matches('/'), &self.gui_cwd)
+    }
+
+    fn create_directory(&mut self, name: &str) {
+        let name = name.trim();
+        if !name.is_empty() && !name.contains('/') {
+            self.fs.insert(self.child_path(name), Inode::Directory);
+        }
+    }
+
+    fn direct_children(&self) -> Vec<(String, bool, usize)> {
+        let prefix = if self.gui_cwd == "/" {
+            "/".to_string()
+        } else {
+            format!("{}/", self.gui_cwd)
+        };
+        let mut children = Vec::new();
+
+        for (path, inode) in &self.fs {
+            if path.starts_with(&prefix) {
+                let remainder = &path[prefix.len()..];
+                if !remainder.is_empty() && !remainder.contains('/') {
+                    let size = match inode {
+                        Inode::Directory => 0,
+                        Inode::File(contents) => contents.len(),
+                    };
+                    children.push((remainder.to_string(), matches!(inode, Inode::Directory), size));
+                }
+            }
+        }
+        children.sort_by(|left, right| left.0.to_lowercase().cmp(&right.0.to_lowercase()));
+        children
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn upload_file(&mut self) {
+        if let Some(path) = rfd::FileDialog::new().pick_file() {
+            if let Ok(contents) = std::fs::read(&path) {
+                let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("upload");
+                self.fs.insert(self.child_path(name), Inode::File(contents));
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn upload_file(&mut self) {
+        if self.upload_receiver.is_some() {
+            return;
+        }
+
+        let task = rfd::AsyncFileDialog::new().pick_file();
+        let (sender, receiver) = mpsc::channel();
+        self.upload_receiver = Some(receiver);
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Some(file) = task.await {
+                let name = file.file_name();
+                let contents = file.read().await;
+                let _ = sender.send((name, contents));
+            }
+        });
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn finish_upload(&mut self) {
+        let result = self
+            .upload_receiver
+            .as_ref()
+            .and_then(|receiver| receiver.try_recv().ok());
+        if let Some((name, contents)) = result {
+            self.fs.insert(self.child_path(&name), Inode::File(contents));
+            self.upload_receiver = None;
+        }
     }
 }
 
@@ -802,15 +898,66 @@ impl DeviceWithUi for VirtualDOS {
     }
 
     fn draw(&mut self, ctx: &egui::Context) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.finish_upload();
+            if self.upload_receiver.is_some() {
+                ctx.request_repaint();
+            }
+        }
+
         let mut open = self.is_open;
+        let mut upload_requested = false;
         egui::Window::new(self.get_name())
             .open(&mut open)
+            .min_width(420.0)
             .show(ctx, |ui| {
-                ui.label(format!("CWD: {}", self.cwd));
+                ui.horizontal(|ui| {
+                    if ui.button("Up").clicked() && self.gui_cwd != "/" {
+                        self.gui_cwd = self
+                            .gui_cwd
+                            .rsplit_once('/')
+                            .and_then(|(parent, _)| if parent.is_empty() { Some("/") } else { Some(parent) })
+                            .unwrap_or("/")
+                            .to_string();
+                    }
+                    ui.monospace(format!("{}", self.gui_cwd));
+                    if ui.button("Upload file...").clicked() {
+                        upload_requested = true;
+                    }
+                });
                 ui.separator();
-                ui.label(format!("Arg Buffer: '{}'", self.arg_buffer));
-                ui.label(format!("Status Code: {}", self.status));
+
+                egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                    for (name, is_directory, size) in self.direct_children() {
+                        ui.horizontal(|ui| {
+                            if is_directory {
+                                if ui.button(format!("[DIR] {}", name)).clicked() {
+                                    self.gui_cwd = self.child_path(&name);
+                                }
+                            } else {
+                                ui.label(format!("[FILE] {} ({} bytes)", name, size));
+                            }
+                        });
+                    }
+                });
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.text_edit_singleline(&mut self.new_directory);
+                    if ui.button("Create folder").clicked() {
+                        let name = std::mem::take(&mut self.new_directory);
+                        self.create_directory(&name);
+                    }
+                });
+                #[cfg(target_arch = "wasm32")]
+                if self.upload_receiver.is_some() {
+                    ui.label("Waiting for file...");
+                }
             });
+        if upload_requested {
+            self.upload_file();
+        }
         self.is_open = open;
     }
 }

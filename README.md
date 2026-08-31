@@ -10,7 +10,7 @@
 
 A **Zilog Z80 CPU simulator, editor and debugger** written in Rust, built on top of [`egui`](https://github.com/emilk/egui) / [`eframe`](https://github.com/emilk/eframe). Write or load Z80 assembly, step through it instruction by instruction, and watch every register, flag and memory cell update in real time — as a native desktop app, or entirely in the browser via WebAssembly.
 
-![JAZZ80 screenshot](docs/ui.png)   
+![JAZZ80 screenshot](docs/ui.png)
 
 [![License: GPL v3](https://img.shields.io/github/license/migouche/JAZZ80?color=6a5acd)](https://github.com/migouche/JAZZ80/blob/master/LICENSE)
 [![Web demo](https://img.shields.io/badge/Web%20demo-Open%20app-6a5acd?logo=github&logoColor=white)](https://migouche.github.io/JAZZ80/)

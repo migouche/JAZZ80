@@ -237,6 +237,9 @@ START:
         self.memory = memory.clone();
         self.cpu = Z80A::new(self.memory.clone());
         for device in &self.attached_devices {
+            //self.cpu.attach_device(device.clone());
+
+            device.borrow_mut().reset();
             self.cpu.attach_device(device.clone());
         }
 
