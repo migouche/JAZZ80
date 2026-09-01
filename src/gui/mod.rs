@@ -1110,12 +1110,11 @@ impl eframe::App for Z80App {
                         let mut at_bp = false;
                         if let Some(tab) = self.tabs.get(self.active_tab) {
                             for &bp_line in &tab.breakpoints {
-                                if let Some(&addr) = self.line_to_address.get(&bp_line) {
-                                    if addr == pc {
+                                if let Some(&addr) = self.line_to_address.get(&bp_line)
+                                    && addr == pc {
                                         at_bp = true;
                                         break;
                                     }
-                                }
                             }
                         }
                         if at_bp {
@@ -1461,7 +1460,7 @@ impl eframe::App for Z80App {
                                                         bytes.push(b);
                                                     }
                                                     let s: String = bytes.iter()
-                                                        .map(|&b| if b >= 32 && b <= 126 { b as char } else { '.' })
+                                                        .map(|&b| if (32..=126).contains(&b) { b as char } else { '.' })
                                                         .collect();
 
                                                         // If we hit a null or length is long, check full content for tooltip
@@ -1474,7 +1473,7 @@ impl eframe::App for Z80App {
                                                             full_bytes.push(b);
                                                         }
                                                         let full_s: String = full_bytes.iter()
-                                                            .map(|&b| if b >= 32 && b <= 126 { b as char } else { '.' })
+                                                            .map(|&b| if (32..=126).contains(&b) { b as char } else { '.' })
                                                             .collect();
 
                                                         if bytes.len() < full_bytes.len() {
@@ -1530,7 +1529,7 @@ impl eframe::App for Z80App {
                                             }
 
                                             let s: String = bytes.iter()
-                                                .map(|&b| if b >= 32 && b <= 126 { b as char } else { '.' })
+                                                .map(|&b| if (32..=126).contains(&b) { b as char } else { '.' })
                                                 .collect();
 
                                             // Determine if we need to show truncation or tooltip with full content
@@ -1550,7 +1549,7 @@ impl eframe::App for Z80App {
                                                      full_bytes.push(b);
                                                  }
                                                  full_s = full_bytes.iter()
-                                                    .map(|&b| if b >= 32 && b <= 126 { b as char } else { '.' })
+                                                    .map(|&b| if (32..=126).contains(&b) { b as char } else { '.' })
                                                     .collect();
                                             }
 
@@ -1753,12 +1752,11 @@ impl eframe::App for Z80App {
                                 ui.add_space(2.0);
                             }
 
-                            if let Some(i) = to_activate {
-                                if self.active_tab != i {
+                            if let Some(i) = to_activate
+                                && self.active_tab != i {
                                     self.active_tab = i;
                                     self.is_assembly_stale = true;
                                 }
-                            }
                             if let Some(i) = to_close {
                                 action = Some(HeaderAction::CloseTab(i));
                             }
@@ -1879,11 +1877,10 @@ impl eframe::App for Z80App {
 
                                     let mut addr_str = "    ".to_string();
 
-                                    if emits_code {
-                                        if let Some(&addr) = self.line_to_address.get(&i) {
+                                    if emits_code
+                                        && let Some(&addr) = self.line_to_address.get(&i) {
                                             addr_str = format!("{:04X}", addr);
                                         }
-                                    }
 
                                     let label = egui::Label::new(
                                         egui::RichText::new(addr_str)
@@ -1928,8 +1925,8 @@ impl eframe::App for Z80App {
 
                                     let mut data_str = "".to_string();
 
-                                    if emits_code {
-                                        if let Some(&addr) = self.line_to_address.get(&i) {
+                                    if emits_code
+                                        && let Some(&addr) = self.line_to_address.get(&i) {
 
                                             // 1. Z80 length decoder to fetch the EXACT required bytes 
                                             let len = if upper.starts_with("DB ") || upper.starts_with("DEFB ") {
@@ -2027,7 +2024,6 @@ impl eframe::App for Z80App {
                                                 }
                                             }
                                         }
-                                    }
 
                                     // Pad output heavily so multi-byte values (e.g. DD21, 34 12) have a fixed column space
                                     let formatted_str = format!("{: <14}", data_str);
@@ -2056,12 +2052,11 @@ impl eframe::App for Z80App {
                                     let mut max_addr = -1i32;
 
                                     for (&addr, &line) in &self.address_to_line {
-                                        if addr < pc {
-                                            if (addr as i32) > max_addr {
+                                        if addr < pc
+                                            && (addr as i32) > max_addr {
                                                 max_addr = addr as i32;
                                                 best_match = Some(line);
                                             }
-                                        }
                                     }
                                     best_match.or_else(|| self.address_to_line.get(&pc).copied())
                                 } else {
@@ -2411,7 +2406,7 @@ impl eframe::App for Z80App {
                                         hex_str.push_str(&format!("{:02X} ", val));
 
                                         // Ascii representation
-                                        if val >= 32 && val <= 126 {
+                                        if (32..=126).contains(&val) {
                                             ascii_str.push(val as char);
                                         } else {
                                             ascii_str.push('.');

@@ -344,11 +344,10 @@ impl DeviceWithUi for GenericInterruptDevice {
 
                     ui.horizontal(|ui| {
                         ui.label("Vector/Opcode (Hex):");
-                        if ui.text_edit_singleline(&mut self.vector_input).changed() {
-                            if let Ok(val) = u8::from_str_radix(&self.vector_input, 16) {
+                        if ui.text_edit_singleline(&mut self.vector_input).changed()
+                            && let Ok(val) = u8::from_str_radix(&self.vector_input, 16) {
                                 self.vector = val;
                             }
-                        }
                     });
 
                     ui.label(format!("Current Vector: 0x{:02X}", self.vector));
@@ -411,7 +410,7 @@ impl IODevice for LcdDisplay {
     fn write_out(&mut self, port: u16, data: u8) -> bool {
         if (port & 0xFF) == (self.port & 0xFF) {
             let ch = data as char;
-            if ch == '\n' || (ch >= ' ' && ch <= '~') {
+            if ch == '\n' || (' '..='~').contains(&ch) {
                 self.display_buffer.push(ch);
             } else {
                 self.display_buffer.push('.');
@@ -552,7 +551,7 @@ impl VirtualTerminal {
 
     fn append_display_byte(&mut self, data: u8) {
         let ch = data as char;
-        if ch == '\n' || ch == '\r' || (ch >= ' ' && ch <= '~') {
+        if ch == '\n' || ch == '\r' || (' '..='~').contains(&ch) {
             self.tx_buffer.push(ch);
         } else {
             self.tx_buffer.push('.');
@@ -751,21 +750,20 @@ impl VirtualDOS {
                 }
             }
         }
-        children.sort_by(|left, right| left.0.to_lowercase().cmp(&right.0.to_lowercase()));
+        children.sort_by_key(|left| left.0.to_lowercase());
         children
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn upload_file(&mut self) {
-        if let Some(path) = rfd::FileDialog::new().pick_file() {
-            if let Ok(contents) = std::fs::read(&path) {
+        if let Some(path) = rfd::FileDialog::new().pick_file()
+            && let Ok(contents) = std::fs::read(&path) {
                 let name = path
                     .file_name()
                     .and_then(|name| name.to_str())
                     .unwrap_or("upload");
                 self.fs.insert(self.child_path(name), Inode::File(contents));
             }
-        }
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -937,17 +935,17 @@ impl DeviceWithUi for VirtualDOS {
                         self.gui_cwd = self
                             .gui_cwd
                             .rsplit_once('/')
-                            .and_then(|(parent, _)| {
+                            .map(|(parent, _)| {
                                 if parent.is_empty() {
-                                    Some("/")
+                                    "/"
                                 } else {
-                                    Some(parent)
+                                    parent
                                 }
                             })
                             .unwrap_or("/")
                             .to_string();
                     }
-                    ui.monospace(format!("{}", self.gui_cwd));
+                    ui.monospace(self.gui_cwd.to_string());
                     if ui.button("Upload file...").clicked() {
                         upload_requested = true;
                     }

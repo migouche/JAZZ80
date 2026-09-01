@@ -122,10 +122,9 @@ fn assemble_source(code: &str) -> Result<AssemblyResult, String> {
 
         let mut current_label: Option<String> = None;
 
-        if tokens.len() == 3 {
-            if let (Token::Identifier(name), Token::Identifier(mnemonic)) = (&tokens[0], &tokens[1])
-            {
-                if mnemonic == "EQU" {
+        if tokens.len() == 3
+            && let (Token::Identifier(name), Token::Identifier(mnemonic)) = (&tokens[0], &tokens[1])
+                && mnemonic == "EQU" {
                     let constant_name = qualify_label(name, latest_global_label.as_deref())
                         .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
                     if labels.contains_key(&constant_name) {
@@ -154,11 +153,9 @@ fn assemble_source(code: &str) -> Result<AssemblyResult, String> {
                     );
                     continue;
                 }
-            }
-        }
 
-        if tokens.len() >= 2 {
-            if let (Token::Identifier(name), Token::Colon) = (&tokens[0], &tokens[1]) {
+        if tokens.len() >= 2
+            && let (Token::Identifier(name), Token::Colon) = (&tokens[0], &tokens[1]) {
                 let label_name = qualify_label(name, latest_global_label.as_deref())
                     .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
                 if labels.contains_key(&label_name) {
@@ -174,8 +171,8 @@ fn assemble_source(code: &str) -> Result<AssemblyResult, String> {
                 current_label = Some(label_name.clone());
 
                 let mut sym_kind = SymbolType::Label;
-                if tokens.len() > 2 {
-                    if let Token::Identifier(next_mnemonic) = &tokens[2] {
+                if tokens.len() > 2
+                    && let Token::Identifier(next_mnemonic) = &tokens[2] {
                         match next_mnemonic.as_str() {
                             "DB" | "DEFB" => sym_kind = SymbolType::Byte,
                             "DW" | "DEFW" => sym_kind = SymbolType::Word,
@@ -183,7 +180,6 @@ fn assemble_source(code: &str) -> Result<AssemblyResult, String> {
                             _ => {}
                         }
                     }
-                }
 
                 labels.insert(
                     label_name,
@@ -195,7 +191,6 @@ fn assemble_source(code: &str) -> Result<AssemblyResult, String> {
                 );
                 tokens.drain(0..2);
             }
-        }
 
         tokens = qualify_local_tokens(&tokens, latest_global_label.as_deref())
             .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
@@ -224,9 +219,9 @@ fn assemble_source(code: &str) -> Result<AssemblyResult, String> {
         let bytes = parse_instruction(&tokens, current_pc, &known_symbols, true)
             .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
 
-        if let Some(label) = data_label {
-            if let Some(sym) = labels.get_mut(&label) {
-                if let Token::Identifier(mnemonic) = &tokens[0] {
+        if let Some(label) = data_label
+            && let Some(sym) = labels.get_mut(&label)
+                && let Token::Identifier(mnemonic) = &tokens[0] {
                     match mnemonic.as_str() {
                         "DB" | "DEFB" => {
                             let contains_string = parse_operands(&tokens[1..])
@@ -280,8 +275,6 @@ fn assemble_source(code: &str) -> Result<AssemblyResult, String> {
                         _ => {}
                     }
                 }
-            }
-        }
 
         instructions.push((line_idx, current_pc, tokens));
         current_pc += bytes.len() as u16;
@@ -453,14 +446,12 @@ fn tokenize(text: &str) -> Result<Vec<Token>, String> {
                 }
 
                 // Check for 'h' suffix
-                if !is_hex && !num_str.is_empty() {
-                    if let Some(&nc) = chars.peek() {
-                        if nc == 'H' || nc == 'h' {
+                if !is_hex && !num_str.is_empty()
+                    && let Some(&nc) = chars.peek()
+                        && (nc == 'H' || nc == 'h') {
                             is_hex = true;
                             chars.next();
                         }
-                    }
-                }
 
                 let val = if is_hex {
                     u16::from_str_radix(&num_str, 16).map_err(|_| "Invalid hex number")?
@@ -1032,15 +1023,13 @@ fn encode_add(
     labels: &HashMap<String, u16>,
     dry: bool,
 ) -> Result<Vec<u8>, String> {
-    if ops.len() == 2 {
-        if let Operand::Register(dest) = &ops[0] {
-            if dest == "HL" {
-                if let Operand::Register(src) = &ops[1] {
-                    if let Some(rpc) = get_rp_code(src) {
+    if ops.len() == 2
+        && let Operand::Register(dest) = &ops[0] {
+            if dest == "HL"
+                && let Operand::Register(src) = &ops[1]
+                    && let Some(rpc) = get_rp_code(src) {
                         return Ok(vec![0x09 | (rpc << 4)]);
                     }
-                }
-            }
             if dest == "IX" || dest == "IY" {
                 let prefix = if dest == "IX" { 0xDD } else { 0xFD };
                 if let Operand::Register(src) = &ops[1] {
@@ -1055,7 +1044,6 @@ fn encode_add(
                 }
             }
         }
-    }
     encode_alu_op(ALUOperation::ADD, ops, labels, dry)
 }
 
@@ -1064,17 +1052,13 @@ fn encode_sbc(
     labels: &HashMap<String, u16>,
     dry: bool,
 ) -> Result<Vec<u8>, String> {
-    if ops.len() == 2 {
-        if let Operand::Register(dest) = &ops[0] {
-            if dest == "HL" {
-                if let Operand::Register(src) = &ops[1] {
-                    if let Some(rpc) = get_rp_code(src) {
+    if ops.len() == 2
+        && let Operand::Register(dest) = &ops[0]
+            && dest == "HL"
+                && let Operand::Register(src) = &ops[1]
+                    && let Some(rpc) = get_rp_code(src) {
                         return Ok(vec![0xED, 0x42 | (rpc << 4)]);
                     }
-                }
-            }
-        }
-    }
     encode_alu_op(ALUOperation::SBC, ops, labels, dry)
 }
 
@@ -1103,13 +1087,11 @@ fn encode_alu_bin(
     dry: bool,
 ) -> Result<Vec<u8>, String> {
     if ops.len() != 1 {
-        if ops.len() == 2 {
-            if let Operand::Register(r) = &ops[0] {
-                if r == "A" {
+        if ops.len() == 2
+            && let Operand::Register(r) = &ops[0]
+                && r == "A" {
                     return encode_alu_bin(base_r, base_n, &ops[1..], labels, dry);
                 }
-            }
-        }
         return Err("ALU ops count error".to_string());
     }
     match &ops[0] {
@@ -1177,8 +1159,8 @@ fn encode_jp(ops: &[Operand], labels: &HashMap<String, u16>, dry: bool) -> Resul
                 Operand::Register(r) if r == "C" => Some("C"),
                 _ => None,
             };
-            if let Some(c) = cond {
-                if let Some(cc) = get_condition_code(c) {
+            if let Some(c) = cond
+                && let Some(cc) = get_condition_code(c) {
                     let nn = if matches!(
                         &ops[1],
                         Operand::IndirectImmediate(_) | Operand::IndirectLabel(_)
@@ -1189,7 +1171,6 @@ fn encode_jp(ops: &[Operand], labels: &HashMap<String, u16>, dry: bool) -> Resul
                     };
                     return Ok(vec![0xC2 | (cc << 3), (nn & 0xFF) as u8, (nn >> 8) as u8]);
                 }
-            }
             Err("Invalid JP condition/target".to_string())
         }
         _ => Err("Invalid JP args".to_string()),
@@ -1211,7 +1192,7 @@ fn encode_jr(
             // JR d
             let target = resolve_immediate(&ops[0], labels, dry)?;
             let offset_val = (target as i32) - ((pc as i32) + 2);
-            if !dry && (offset_val < -128 || offset_val > 127) {
+            if !dry && !(-128..=127).contains(&offset_val) {
                 return Err("JR offset out of range".to_string());
             }
             Ok(vec![0x18, offset_val as i8 as u8])
@@ -1222,19 +1203,18 @@ fn encode_jr(
                 Operand::Register(r) if r == "C" => Some("C"),
                 _ => None,
             };
-            if let Some(c) = cond {
-                if let Some(cc) = get_condition_code(c) {
+            if let Some(c) = cond
+                && let Some(cc) = get_condition_code(c) {
                     if cc > 3 {
                         return Err("Invalid JR condition".to_string());
                     }
                     let target = resolve_immediate(&ops[1], labels, dry)?;
                     let offset_val = (target as i32) - ((pc as i32) + 2);
-                    if !dry && (offset_val < -128 || offset_val > 127) {
+                    if !dry && !(-128..=127).contains(&offset_val) {
                         return Err("JR offset out of range".to_string());
                     }
                     return Ok(vec![0x20 | (cc << 3), offset_val as i8 as u8]);
                 }
-            }
             Err("Invalid JR args".to_string())
         }
         _ => Err("Invalid JR args".to_string()),
@@ -1252,7 +1232,7 @@ fn encode_djnz(
     }
     let target = resolve_immediate(&ops[0], labels, dry)?;
     let offset_val = (target as i32) - ((pc as i32) + 2);
-    if !dry && (offset_val < -128 || offset_val > 127) {
+    if !dry && !(-128..=127).contains(&offset_val) {
         return Err("DJNZ offset out of range".to_string());
     }
     Ok(vec![0x10, offset_val as i8 as u8])
@@ -1337,11 +1317,10 @@ fn encode_ret(ops: &[Operand]) -> Result<Vec<u8>, String> {
             Operand::Register(r) if r == "C" => Some("C"),
             _ => None,
         };
-        if let Some(c) = cond {
-            if let Some(cc) = get_condition_code(c) {
+        if let Some(c) = cond
+            && let Some(cc) = get_condition_code(c) {
                 return Ok(vec![0xC0 | (cc << 3)]);
             }
-        }
     }
     Err("RET args".to_string())
 }
