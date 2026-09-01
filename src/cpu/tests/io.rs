@@ -57,6 +57,7 @@ fn test_in_a_n(#[case] port: u8, #[case] value: u8) {
     let mut cpu = setup_cpu();
     let device = Rc::new(RefCell::new(MockIODevice::new(port as u16, vec![value])));
     cpu.attach_device(device.clone());
+    cpu.set_register(GPR::A, 0xAA);
 
     // Opcode: DB n (IN A, (n))
     cpu.memory.borrow_mut().write(0x0000, 0xDB);

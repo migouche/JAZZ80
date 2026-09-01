@@ -1831,14 +1831,13 @@ impl Z80A {
                         test_log!(self, "OUT (n), A");
                         let n = self.fetch();
                         let a = self.get_register(GPR::A);
-                        let port = ((a as u16) << 8) | (n as u16);
+                        let port = n as u16;
                         self.write_io(port, a);
                     }
                     3 => {
                         test_log!(self, "IN A, (n)");
                         let n = self.fetch();
-                        let a = self.get_register(GPR::A);
-                        let port = ((a as u16) << 8) | (n as u16);
+                        let port = n as u16;
                         let val = self.read_io(port);
                         self.set_register(GPR::A, val);
                     }

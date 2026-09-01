@@ -139,6 +139,6 @@ fn test_nmi_wakes_halt() {
 
     cpu.tick(); // Should wake up and process NMI
 
-    assert_eq!(cpu.halted, false);
+    assert!(!cpu.halted);
     assert_eq!(cpu.pc, 0x0066);
 }

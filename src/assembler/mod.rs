@@ -49,6 +49,231 @@ pub struct Symbol {
     pub source_order: usize,
 }
 
+pub fn assemble_binary(code: &str) -> Result<Vec<u8>, String> {
+    let image = assemble_absolute(code)?;
+    let Some(first_address) = image.iter().map(|(address, _)| *address).min() else {
+        return Ok(Vec::new());
+    };
+    let highest_address = image
+        .iter()
+        .map(|(address, _)| *address)
+        .max()
+        .expect("image is known to be non-empty");
+
+    let mut bytes = vec![0; (highest_address - first_address) as usize + 1];
+    for (address, byte) in image {
+        bytes[(address - first_address) as usize] = byte;
+    }
+    Ok(bytes)
+}
+
+pub fn assemble_absolute(code: &str) -> Result<Vec<(u16, u8)>, String> {
+    let mut labels: HashMap<String, Symbol> = HashMap::new();
+    let mut current_pc = 0u16;
+    let mut instructions = Vec::new();
+    let mut line_addresses = HashMap::new();
+    let mut latest_global_label: Option<String> = None;
+    let mut active_data_label: Option<String> = None;
+
+    for (line_idx, line) in code.lines().enumerate() {
+        line_addresses.insert(line_idx + 1, current_pc);
+        let clean_line = line.split(';').next().unwrap_or("").trim();
+        if clean_line.is_empty() {
+            continue;
+        }
+
+        let mut tokens =
+            tokenize(clean_line).map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+        if tokens.is_empty() {
+            continue;
+        }
+
+        let mut current_label: Option<String> = None;
+
+        if tokens.len() == 3 {
+            if let (Token::Identifier(name), Token::Identifier(mnemonic)) = (&tokens[0], &tokens[1])
+            {
+                if mnemonic == "EQU" {
+                    let constant_name = qualify_label(name, latest_global_label.as_deref())
+                        .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+                    if labels.contains_key(&constant_name) {
+                        return Err(format!(
+                            "Line {}: Duplicate symbol '{}'",
+                            line_idx + 1,
+                            constant_name
+                        ));
+                    }
+                    let equ_operands = parse_operands(&tokens[2..])
+                        .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+                    if equ_operands.len() != 1 {
+                        return Err(format!("Line {}: EQU expects one value", line_idx + 1));
+                    }
+                    let known_symbols: HashMap<String, u16> =
+                        labels.iter().map(|(k, v)| (k.clone(), v.address)).collect();
+                    let value = resolve_immediate(&equ_operands[0], &known_symbols, false)
+                        .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+                    labels.insert(
+                        constant_name,
+                        Symbol {
+                            address: value,
+                            kind: SymbolType::Constant,
+                            source_order: line_idx,
+                        },
+                    );
+                    continue;
+                }
+            }
+        }
+
+        if tokens.len() >= 2 {
+            if let (Token::Identifier(name), Token::Colon) = (&tokens[0], &tokens[1]) {
+                let label_name = qualify_label(name, latest_global_label.as_deref())
+                    .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+                if labels.contains_key(&label_name) {
+                    return Err(format!(
+                        "Line {}: Duplicate label '{}'",
+                        line_idx + 1,
+                        label_name
+                    ));
+                }
+                if !name.starts_with('.') {
+                    latest_global_label = Some(label_name.clone());
+                }
+                current_label = Some(label_name.clone());
+
+                let mut sym_kind = SymbolType::Label;
+                if tokens.len() > 2 {
+                    if let Token::Identifier(next_mnemonic) = &tokens[2] {
+                        match next_mnemonic.as_str() {
+                            "DB" | "DEFB" => sym_kind = SymbolType::Byte,
+                            "DW" | "DEFW" => sym_kind = SymbolType::Word,
+                            "DS" | "DEFS" => sym_kind = SymbolType::Array(0),
+                            _ => {}
+                        }
+                    }
+                }
+
+                labels.insert(
+                    label_name,
+                    Symbol {
+                        address: current_pc,
+                        kind: sym_kind,
+                        source_order: line_idx,
+                    },
+                );
+                tokens.drain(0..2);
+            }
+        }
+
+        tokens = qualify_local_tokens(&tokens, latest_global_label.as_deref())
+            .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+
+        if tokens.is_empty() {
+            active_data_label = current_label;
+            continue;
+        }
+
+        let is_db = matches!(
+            tokens.first(),
+            Some(Token::Identifier(mnemonic)) if mnemonic == "DB" || mnemonic == "DEFB"
+        );
+        let data_label = current_label.clone().or_else(|| active_data_label.clone());
+        let continuation = current_label.is_none() && is_db && active_data_label.is_some();
+        if is_db {
+            if current_label.is_some() {
+                active_data_label = current_label.clone();
+            }
+        } else {
+            active_data_label = None;
+        }
+
+        let known_symbols: HashMap<String, u16> =
+            labels.iter().map(|(k, v)| (k.clone(), v.address)).collect();
+        let bytes = parse_instruction(&tokens, current_pc, &known_symbols, true)
+            .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+
+        if let Some(label) = data_label {
+            if let Some(sym) = labels.get_mut(&label) {
+                if let Token::Identifier(mnemonic) = &tokens[0] {
+                    match mnemonic.as_str() {
+                        "DB" | "DEFB" => {
+                            let contains_string = parse_operands(&tokens[1..])
+                                .map(|ops| {
+                                    ops.iter().any(|op| matches!(op, Operand::StringLiteral(_)))
+                                })
+                                .unwrap_or(false);
+                            let previous_len = if current_label.is_some()
+                                || (continuation && matches!(sym.kind, SymbolType::Label))
+                            {
+                                0
+                            } else {
+                                match sym.kind {
+                                    SymbolType::String(len) | SymbolType::Array(len) => len,
+                                    SymbolType::Byte => 1,
+                                    _ => 0,
+                                }
+                            };
+                            let row_kind = if contains_string {
+                                SymbolType::String(bytes.len())
+                            } else if bytes.len() == 1 {
+                                SymbolType::Byte
+                            } else {
+                                SymbolType::Array(bytes.len())
+                            };
+
+                            if continuation && !matches!(sym.kind, SymbolType::Label) {
+                                let row_name = format!("{}[{}]", label, line_idx + 1);
+                                labels.insert(
+                                    row_name,
+                                    Symbol {
+                                        address: current_pc,
+                                        kind: row_kind,
+                                        source_order: line_idx,
+                                    },
+                                );
+                            } else {
+                                let total_len = previous_len + bytes.len();
+                                sym.kind = if contains_string {
+                                    SymbolType::String(total_len)
+                                } else if total_len == 1 {
+                                    SymbolType::Byte
+                                } else {
+                                    SymbolType::Array(total_len)
+                                };
+                            }
+                        }
+                        "DS" | "DEFS" => {
+                            sym.kind = SymbolType::Array(bytes.len());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        instructions.push((line_idx, current_pc, tokens));
+        current_pc += bytes.len() as u16;
+    }
+
+    let label_addresses: HashMap<String, u16> =
+        labels.iter().map(|(k, v)| (k.clone(), v.address)).collect();
+    let mut image = Vec::new();
+
+    for (line_idx, pc, tokens) in instructions {
+        let bytes = parse_instruction(&tokens, pc, &label_addresses, false)
+            .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+
+        let is_org = matches!(tokens.first(), Some(Token::Identifier(m)) if m == "ORG");
+        if !is_org {
+            for (offset, byte) in bytes.iter().enumerate() {
+                image.push((pc + offset as u16, *byte));
+            }
+        }
+    }
+
+    Ok(image)
+}
+
 pub fn assemble(
     code: &str,
 ) -> Result<
@@ -262,7 +487,9 @@ pub fn assemble(
     for (line_idx, pc, tokens) in instructions {
         let bytes = parse_instruction(&tokens, pc, &label_addresses, false)
             .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+
         output.extend(bytes);
+
         address_to_line.insert(pc, line_idx + 1);
     }
     Ok((output, labels, address_to_line, line_addresses))

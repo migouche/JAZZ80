@@ -1,4 +1,7 @@
 ; Minimal monitor for the JAZZ80 virtual terminal.
+; Design note: the OS reserves the shadow register bank (AF', BC', DE', HL') for
+; its own work. User programs are launched in the primary bank, so they should
+; not depend on the alternate register set being available.
 
 TERM_DATA      EQU 00h
 TERM_STATUS    EQU 01h
@@ -7,6 +10,7 @@ FS_CMD         EQU 21h
 FS_STATUS      EQU 22h
 CMD_BUFFER     EQU 4000h
 CMD_BUFFER_END EQU 4040h
+PROG_LOAD_ADDR EQU 8000h
 
 ORG 0000h
     JP OS_BOOT
@@ -22,6 +26,10 @@ ORG 0018h
 
 OS_BOOT:
     LD SP, 0FFFFh
+    ; Switch into the monitor's bank so the main register set is left free for
+    ; user programs. The shell and filesystem code keep their own state here.
+    EX AF, AF'
+    EXX
     LD HL, MSG_BANNER
     CALL PRINT_STRING
 
@@ -190,6 +198,8 @@ CMD_TABLE:
     DW CMD_LS_STR, CMD_LS, 0000h
     DW CMD_CD_STR, CMD_CD, 0001h
     DW CMD_MKDIR_STR, CMD_MKDIR, 0001h
+    DW CMD_RUN_STR, CMD_RUN, 0001h
+    DW CMD_TYPE_STR, CMD_TYPE, 0001h
     DW 0000h, 0000h, 0000h
 
 CMD_HELP_STR:
@@ -202,6 +212,10 @@ CMD_CD_STR:
     DB "CD ", 0
 CMD_MKDIR_STR:
     DB "MKDIR ", 0
+CMD_RUN_STR:
+    DB "RUN ", 0
+CMD_TYPE_STR:
+    DB "TYPE ", 0
 
 CMD_HELP:
     LD HL, MSG_HELP
@@ -241,6 +255,51 @@ CMD_MKDIR:
     OUT (FS_CMD), A
     RET
 
+CMD_RUN:
+    CALL SEND_FS_ARGS
+    LD A, 04h
+    OUT (FS_CMD), A
+    IN A, (FS_STATUS)
+    CP 01h
+    JP Z, .FILE_ERR
+    CP 02h
+    RET NZ
+    LD HL, PROG_LOAD_ADDR
+.LOAD_LOOP:
+    IN A, (FS_STATUS)
+    CP 02h
+    JR NZ, .EXEC
+    IN A, (FS_DATA)
+    LD (HL), A
+    INC HL
+    JR .LOAD_LOOP
+.EXEC:
+    ; The monitor keeps its own state in the shadow bank. When a program starts,
+    ; make the main bank active for the user program, then restore the OS bank on
+    ; return. User code should treat AF'/BC'/DE'/HL' as reserved by the OS.
+    EX AF, AF'
+    EXX
+    CALL PROG_LOAD_ADDR
+    EX AF, AF'
+    EXX
+    RET
+.FILE_ERR:
+    LD HL, MSG_FILE_ERR
+    CALL PRINT_STRING
+    RET
+
+CMD_TYPE:
+    CALL SEND_FS_ARGS
+    LD A, 04h
+    OUT (FS_CMD), A
+.TYPE_LOOP:
+    IN A, (FS_STATUS)
+    CP 02h
+    RET NZ
+    IN A, (FS_DATA)
+    CALL PRINT_CHAR
+    JR .TYPE_LOOP
+
 SEND_FS_ARGS:
     LD A, 00h
     OUT (FS_CMD), A
@@ -263,10 +322,14 @@ MSG_HELP:
     DB "CLEAR - clear the terminal", 0Dh, 0Ah
     DB "CD <dir> - change directory", 0Dh, 0Ah
     DB "LS - list directory", 0Dh, 0Ah
-    DB "MKDIR <dir> - create directory", 0Dh, 0Ah, 0
+    DB "MKDIR <dir> - create directory", 0Dh, 0Ah
+    DB "TYPE <file> - show file contents", 0Dh, 0Ah
+    DB "RUN <file> - execute program", 0Dh, 0Ah, 0
 MSG_CLEAR:
     DB 1Bh, "[2J", 1Bh, "[H", 0
 MSG_UNKNOWN:
     DB "Unknown command", 0Dh, 0Ah, 0
 MSG_DIR_ERR:
     DB "Directory not found", 0Dh, 0Ah, 0
+MSG_FILE_ERR:
+    DB "File not found", 0Dh, 0Ah, 0

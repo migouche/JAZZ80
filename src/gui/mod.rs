@@ -1,4 +1,4 @@
-use crate::assembler::{Symbol, SymbolType, assemble};
+use crate::assembler::{Symbol, SymbolType, assemble, assemble_absolute, assemble_binary};
 use eframe::egui::{self, TextBuffer};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -43,6 +43,8 @@ enum HeaderAction {
     OpenFile(PathBuf),
     SaveFile,
     SaveFileAs,
+    AssembleBinary,
+    LoadBinary,
     CloseTab(usize),
     Quit,
 }
@@ -62,13 +64,24 @@ enum SymbolDisplayFormat {
     HexWords,
 }
 
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum EditorTabKind {
+    #[default]
+    Source,
+    Binary,
+}
+
 #[derive(serde::Deserialize, serde::Serialize, Clone)]
 pub struct EditorTab {
     pub path: Option<PathBuf>,
     pub code: String,
+    #[serde(default)]
+    pub kind: EditorTabKind,
     pub is_dirty: bool,
     #[serde(default)]
     pub breakpoints: HashSet<usize>,
+    #[serde(skip)]
+    pub binary_bytes: Option<Vec<u8>>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -237,8 +250,6 @@ START:
         self.memory = memory.clone();
         self.cpu = Z80A::new(self.memory.clone());
         for device in &self.attached_devices {
-            //self.cpu.attach_device(device.clone());
-
             device.borrow_mut().reset();
             self.cpu.attach_device(device.clone());
         }
@@ -249,7 +260,9 @@ START:
             return;
         }
 
-        self.loaded_file_name = self.tabs[self.active_tab]
+        let active = self.active_tab;
+        let active_tab = &self.tabs[active];
+        self.loaded_file_name = active_tab
             .path
             .as_ref()
             .and_then(|p| p.file_name())
@@ -257,15 +270,44 @@ START:
             .unwrap_or("Untitled")
             .to_string();
 
-        let code = &self.tabs[self.active_tab].code;
-        // Assemble and Load code
-        let (bytes, symbols, addr_map, line_map, error) = match assemble(code) {
-            Ok((b, s, m, l)) => (b, s, m, l, None),
-            Err(e) => (
+        if active_tab.kind == EditorTabKind::Binary {
+            self.symbol_table.clear();
+            self.address_to_line.clear();
+            self.line_to_address.clear();
+            self.is_assembly_stale = false;
+            self.last_error = None;
+
+            if let Some(bytes) = active_tab.binary_bytes.clone() {
+                let mut mem = self.memory.borrow_mut();
+                for (i, b) in bytes.iter().enumerate() {
+                    mem.write(i as u16, *b);
+                }
+            } else {
+                self.last_error = Some("Binary tab is missing raw bytes".to_string());
+            }
+            return;
+        }
+
+        let code = &active_tab.code;
+        let (bytes, symbols, addr_map, line_map, image, error) = match (
+            assemble(code),
+            assemble_absolute(code),
+        ) {
+            (Ok((b, s, m, l)), Ok(image)) => (b, s, m, l, image, None),
+            (Err(e), _) => (
                 Vec::new(),
                 HashMap::new(),
                 HashMap::new(),
                 HashMap::new(),
+                Vec::new(),
+                Some(e),
+            ),
+            (_, Err(e)) => (
+                Vec::new(),
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                Vec::new(),
                 Some(e),
             ),
         };
@@ -273,15 +315,21 @@ START:
         self.symbol_table = symbols;
         self.address_to_line = addr_map;
         self.line_to_address = line_map;
-        self.is_assembly_stale = false; // Code was fresh assembled
+        self.is_assembly_stale = false;
 
         if let Some(err) = error {
             self.last_error = Some(err);
         } else {
             self.last_error = None;
             let mut mem = self.memory.borrow_mut();
+            let image_addr_set: HashSet<u16> = image.iter().map(|(addr, _)| *addr).collect();
+            for (addr, b) in &image {
+                mem.write(*addr, *b);
+            }
             for (i, b) in bytes.iter().enumerate() {
-                mem.write(i as u16, *b);
+                if !image_addr_set.contains(&(i as u16)) {
+                    mem.write(i as u16, *b);
+                }
             }
         }
     }
@@ -301,8 +349,10 @@ START:
                         loaded_app.tabs.push(EditorTab {
                             path: None,
                             code: Self::default_code(),
+                            kind: EditorTabKind::Source,
                             is_dirty: false,
                             breakpoints: HashSet::new(),
+                            binary_bytes: None,
                         });
                     }
                     loaded_app
@@ -321,6 +371,7 @@ START:
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Assembly", &["asm", "z80"])
+            .add_filter("Binary", &["bin", "rom", "com"])
             .add_filter("All files", &["*"])
             .pick_file()
         {
@@ -354,8 +405,10 @@ START:
         self.tabs.push(EditorTab {
             path: None,
             code: Self::default_code(),
+            kind: EditorTabKind::Source,
             is_dirty: false,
             breakpoints: HashSet::new(),
+            binary_bytes: None,
         });
         self.active_tab = self.tabs.len() - 1;
         self.is_assembly_stale = true;
@@ -377,6 +430,64 @@ START:
         }
     }
 
+    fn binary_hexdump(bytes: &[u8]) -> String {
+        let mut lines = Vec::new();
+        for (offset, chunk) in bytes.chunks(16).enumerate() {
+            let start = offset * 16;
+            let hex = chunk
+                .iter()
+                .map(|b| format!("{:02X}", b))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let ascii = chunk
+                .iter()
+                .map(|b| {
+                    let c = *b as char;
+                    if c.is_ascii_graphic() || c == ' ' {
+                        c
+                    } else {
+                        '.'
+                    }
+                })
+                .collect::<String>();
+            lines.push(format!("{:04X}: {:<47} {}", start as u16, hex, ascii));
+        }
+        if lines.is_empty() {
+            "".to_string()
+        } else {
+            lines.join("\n")
+        }
+    }
+
+    fn open_binary_tab(
+        &mut self,
+        path: PathBuf,
+        bytes: Vec<u8>,
+        storage: Option<&mut (dyn eframe::Storage + 'static)>,
+    ) {
+        let hexdump = Self::binary_hexdump(&bytes);
+        if let Some(idx) = self.tabs.iter().position(|tab| {
+            tab.kind == EditorTabKind::Binary && tab.path.as_ref() == Some(&path)
+        }) {
+            self.active_tab = idx;
+        } else {
+            self.tabs.push(EditorTab {
+                path: Some(path.clone()),
+                code: hexdump,
+                kind: EditorTabKind::Binary,
+                is_dirty: false,
+                breakpoints: HashSet::new(),
+                binary_bytes: Some(bytes),
+            });
+            self.active_tab = self.tabs.len() - 1;
+        }
+
+        self.add_recent_file(path);
+        self.is_assembly_stale = false;
+        self.save_to_storage(storage);
+        self.load_and_reset();
+    }
+
     fn load_file_content(
         &mut self,
         path: PathBuf,
@@ -389,20 +500,27 @@ START:
         let current_is_disposable = current_tab.path.is_none()
             && (current_tab.code.trim().is_empty() || current_tab.code == default_code)
             && !current_tab.is_dirty;
+        let binary_kind = path.extension().and_then(|e| e.to_str()).map(|ext| {
+            matches!(ext.to_ascii_lowercase().as_str(), "bin" | "rom" | "com")
+        }).unwrap_or(false);
 
         if current_is_disposable {
             self.tabs[self.active_tab] = EditorTab {
                 path: Some(path.clone()),
                 code: content,
+                kind: if binary_kind { EditorTabKind::Binary } else { EditorTabKind::Source },
                 is_dirty: false,
                 breakpoints: HashSet::new(),
+                binary_bytes: None,
             };
         } else {
             self.tabs.push(EditorTab {
                 path: Some(path.clone()),
                 code: content,
+                kind: if binary_kind { EditorTabKind::Binary } else { EditorTabKind::Source },
                 is_dirty: false,
                 breakpoints: HashSet::new(),
+                binary_bytes: None,
             });
             self.active_tab = self.tabs.len() - 1;
         }
@@ -427,6 +545,25 @@ START:
             return;
         }
 
+        let is_binary = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "bin" | "rom" | "com"))
+            .unwrap_or(false);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if is_binary {
+            match std::fs::read(&path) {
+                Ok(bytes) => {
+                    self.open_binary_tab(path, bytes, storage);
+                }
+                Err(err) => {
+                    self.last_error = Some(format!("Failed to open binary file: {}", err));
+                }
+            }
+            return;
+        }
+
         #[cfg(not(target_arch = "wasm32"))]
         match std::fs::read_to_string(&path) {
             Ok(content) => {
@@ -439,9 +576,6 @@ START:
 
         #[cfg(target_arch = "wasm32")]
         {
-            // On web, direct path opening isn't supported via standard FS,
-            // but if we receive a dropped file or similar, we might handle it differently.
-            // For now we assume this is not called directly with a "real" path on web unless via drag-drop implementation.
             self.last_error = Some("Opening local files by path not supported on web".to_string());
         }
     }
@@ -555,6 +689,94 @@ START:
         }
     }
 
+    fn assemble_binary_to_file(&mut self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
+        let code = self.tabs.get(self.active_tab).map(|tab| tab.code.clone());
+        let Some(code) = code else {
+            self.last_error = Some("No active tab to assemble".to_string());
+            return;
+        };
+
+        match assemble_binary(&code) {
+            Ok(bytes) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Binary", &["bin", "rom"])
+                    .add_filter("All files", &["*"])
+                    .save_file()
+                {
+                    if let Err(err) = std::fs::write(&path, &bytes) {
+                        self.last_error = Some(format!("Failed to export binary: {}", err));
+                    } else {
+                        self.last_error = None;
+                        self.add_recent_file(path);
+                        self.save_to_storage(storage);
+                    }
+                    return;
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let name = self.tabs[self.active_tab]
+                        .path
+                        .as_ref()
+                        .and_then(|p| p.file_stem())
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("program")
+                        .to_string()
+                        + ".bin";
+                    let hex = bytes
+                        .iter()
+                        .map(|b| format!("{:02X}", b))
+                        .collect::<Vec<_>>()
+                        .join("");
+                    download_file(&name, &hex);
+                    self.last_error = None;
+                    self.save_to_storage(storage);
+                    return;
+                }
+
+                self.last_error = Some("Binary export was cancelled".to_string());
+            }
+            Err(err) => {
+                self.last_error = Some(format!("Failed to assemble binary: {}", err));
+            }
+        }
+    }
+
+    fn load_binary_file(&mut self, path: PathBuf, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                self.open_binary_tab(path.clone(), bytes, storage);
+                self.loaded_file_name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("program.bin")
+                    .to_string();
+                self.is_running = false;
+                self.last_error = None;
+            }
+            Err(err) => {
+                self.last_error = Some(format!("Failed to load binary: {}", err));
+            }
+        }
+    }
+
+    fn load_binary_dialog(&mut self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Binary", &["bin", "rom", "com"])
+            .add_filter("All files", &["*"])
+            .pick_file()
+        {
+            self.load_binary_file(path, storage);
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.last_error = Some("Binary import is not supported in the web build".to_string());
+        }
+    }
+
     fn add_recent_file(&mut self, path: PathBuf) {
         // Remove if exists to move it to the top
         println!("Adding recent file: {:?}", path);
@@ -615,7 +837,9 @@ impl Default for Z80App {
                 path: None,
                 breakpoints: HashSet::new(),
                 code: Self::default_code(),
+                kind: EditorTabKind::Source,
                 is_dirty: false,
+                binary_bytes: None,
             }],
             active_tab: 0,
             last_error: None,
@@ -738,6 +962,24 @@ impl eframe::App for Z80App {
                         .clicked()
                     {
                         action = Some(HeaderAction::SaveFileAs);
+                        ui.close();
+                    }
+
+                    ui.separator();
+                    if ui
+                        .button("Assemble Binary...")
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                    {
+                        action = Some(HeaderAction::AssembleBinary);
+                        ui.close();
+                    }
+                    if ui
+                        .button("Load Binary...")
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                    {
+                        action = Some(HeaderAction::LoadBinary);
                         ui.close();
                     }
 
@@ -1841,18 +2083,27 @@ impl eframe::App for Z80App {
                                     ui.painter().layout_job(layout_job)
                                 };
 
-                            if ui
-                                .add(
-                                    egui::TextEdit::multiline(&mut current_tab.code)
-                                        .font(egui::TextStyle::Monospace)
-                                        .layouter(&mut layouter)
-                                        .code_editor()
-                                        .desired_width(f32::INFINITY)
-                                        .desired_rows(25)
-                                        .lock_focus(true),
-                                )
-                                .changed()
-                            {
+                            let is_binary_tab = current_tab.kind == EditorTabKind::Binary;
+                            let editor = if is_binary_tab {
+                                egui::TextEdit::multiline(&mut current_tab.code)
+                                    .font(egui::TextStyle::Monospace)
+                                    .layouter(&mut layouter)
+                                    .code_editor()
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(25)
+                                    .lock_focus(true)
+                                    .interactive(false)
+                            } else {
+                                egui::TextEdit::multiline(&mut current_tab.code)
+                                    .font(egui::TextStyle::Monospace)
+                                    .layouter(&mut layouter)
+                                    .code_editor()
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(25)
+                                    .lock_focus(true)
+                            };
+
+                            if ui.add(editor).changed() && !is_binary_tab {
                                 current_tab.is_dirty = true;
                                 self.is_assembly_stale = true;
                             }
@@ -1871,6 +2122,8 @@ impl eframe::App for Z80App {
                 HeaderAction::OpenFile(path) => self.open_file(path, frame.storage_mut()),
                 HeaderAction::SaveFile => self.save_file(self.active_tab, frame.storage_mut()),
                 HeaderAction::SaveFileAs => self.save_file_as(frame.storage_mut()),
+                HeaderAction::AssembleBinary => self.assemble_binary_to_file(frame.storage_mut()),
+                HeaderAction::LoadBinary => self.load_binary_dialog(frame.storage_mut()),
                 HeaderAction::CloseTab(idx) => {
                     if self.tabs[idx].is_dirty {
                         self.pending_modal = Some(ModalType::CloseTab(idx));

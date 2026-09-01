@@ -743,7 +743,11 @@ impl VirtualDOS {
                         Inode::Directory => 0,
                         Inode::File(contents) => contents.len(),
                     };
-                    children.push((remainder.to_string(), matches!(inode, Inode::Directory), size));
+                    children.push((
+                        remainder.to_string(),
+                        matches!(inode, Inode::Directory),
+                        size,
+                    ));
                 }
             }
         }
@@ -755,7 +759,10 @@ impl VirtualDOS {
     fn upload_file(&mut self) {
         if let Some(path) = rfd::FileDialog::new().pick_file() {
             if let Ok(contents) = std::fs::read(&path) {
-                let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("upload");
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("upload");
                 self.fs.insert(self.child_path(name), Inode::File(contents));
             }
         }
@@ -786,7 +793,8 @@ impl VirtualDOS {
             .as_ref()
             .and_then(|receiver| receiver.try_recv().ok());
         if let Some((name, contents)) = result {
-            self.fs.insert(self.child_path(&name), Inode::File(contents));
+            self.fs
+                .insert(self.child_path(&name), Inode::File(contents));
             self.upload_receiver = None;
         }
     }
@@ -877,6 +885,18 @@ impl IODevice for VirtualDOS {
                     self.out_queue.extend(listing.bytes());
                     self.status = if self.out_queue.is_empty() { 0 } else { 2 }; // Set Data Ready
                 }
+                4 => {
+                    let target = self.resolve_path(&self.arg_buffer);
+                    match self.fs.get(&target) {
+                        Some(Inode::File(contents)) => {
+                            self.out_queue.extend(contents.iter().cloned());
+                            self.status = if self.out_queue.is_empty() { 0 } else { 2 };
+                        }
+                        _ => {
+                            self.status = 1; // Error: not found or is a directory
+                        }
+                    }
+                }
                 _ => {}
             }
             true
@@ -917,7 +937,13 @@ impl DeviceWithUi for VirtualDOS {
                         self.gui_cwd = self
                             .gui_cwd
                             .rsplit_once('/')
-                            .and_then(|(parent, _)| if parent.is_empty() { Some("/") } else { Some(parent) })
+                            .and_then(|(parent, _)| {
+                                if parent.is_empty() {
+                                    Some("/")
+                                } else {
+                                    Some(parent)
+                                }
+                            })
                             .unwrap_or("/")
                             .to_string();
                     }
@@ -928,19 +954,21 @@ impl DeviceWithUi for VirtualDOS {
                 });
                 ui.separator();
 
-                egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                    for (name, is_directory, size) in self.direct_children() {
-                        ui.horizontal(|ui| {
-                            if is_directory {
-                                if ui.button(format!("[DIR] {}", name)).clicked() {
-                                    self.gui_cwd = self.child_path(&name);
+                egui::ScrollArea::vertical()
+                    .max_height(220.0)
+                    .show(ui, |ui| {
+                        for (name, is_directory, size) in self.direct_children() {
+                            ui.horizontal(|ui| {
+                                if is_directory {
+                                    if ui.button(format!("[DIR] {}", name)).clicked() {
+                                        self.gui_cwd = self.child_path(&name);
+                                    }
+                                } else {
+                                    ui.label(format!("[FILE] {} ({} bytes)", name, size));
                                 }
-                            } else {
-                                ui.label(format!("[FILE] {} ({} bytes)", name, size));
-                            }
-                        });
-                    }
-                });
+                            });
+                        }
+                    });
 
                 ui.separator();
                 ui.horizontal(|ui| {
