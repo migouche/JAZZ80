@@ -156,5 +156,5 @@ fn test_retn() {
     cpu.tick();
 
     assert_eq!(cpu.pc, 0x5678);
-    assert_eq!(cpu.iff1, true);
+    assert!(cpu.iff1);
 }

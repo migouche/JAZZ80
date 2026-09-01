@@ -87,6 +87,8 @@ trunk build --release
 6. The bundled monitor reserves the alternate register bank for itself; when a program is launched, the OS swaps to the main bank and user code should treat `AF'`, `BC'`, `DE'`, and `HL'` as off-limits unless you are intentionally using them as the simulator's private OS state.
 7. Save your program and pick up where you left off later — the app persists session state between runs.
 
+The bundled assembly examples are documented in the [Z80 Example Programs manual](./z80%20files/README.md), including the devices and port configuration required by each interrupt example.
+
 ## Testing
 
 ```bash

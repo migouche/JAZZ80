@@ -48,8 +48,8 @@ fn test_nmi_disables_maskable_interrupts() {
     cpu.tick(); // Process NMI
 
     // NMI Implementation: iff2 = iff1; iff1 = false;
-    assert_eq!(cpu.iff1, false);
-    assert_eq!(cpu.iff2, true);
+    assert!(!cpu.iff1);
+    assert!(cpu.iff2);
 
     // And PC check
     assert_eq!(cpu.pc, 0x0066);
@@ -65,8 +65,8 @@ fn test_nmi_preserves_iff2_status() {
     cpu.nmi();
     cpu.tick();
 
-    assert_eq!(cpu.iff1, false);
-    assert_eq!(cpu.iff2, false);
+    assert!(!cpu.iff1);
+    assert!(!cpu.iff2);
 }
 
 #[test]
@@ -82,8 +82,8 @@ fn test_retn_restores_iff1() {
     cpu.tick();
 
     // Now at 0x0066, IFF1=false, IFF2=true
-    assert_eq!(cpu.iff1, false);
-    assert_eq!(cpu.iff2, true);
+    assert!(!cpu.iff1);
+    assert!(cpu.iff2);
 
     // Execute RETN (ED 45)
     // Write RETN at 0x0066
@@ -96,8 +96,8 @@ fn test_retn_restores_iff1() {
     assert_eq!(cpu.pc, 0x0000);
 
     // IFF1 should be restored from IFF2
-    assert_eq!(cpu.iff1, true);
-    assert_eq!(cpu.iff2, true);
+    assert!(cpu.iff1);
+    assert!(cpu.iff2);
 }
 
 #[test]
@@ -113,8 +113,8 @@ fn test_retn_restores_iff1_disabled() {
     cpu.tick();
 
     // Now at 0x0066, IFF1=false, IFF2=false
-    assert_eq!(cpu.iff1, false);
-    assert_eq!(cpu.iff2, false);
+    assert!(!cpu.iff1);
+    assert!(!cpu.iff2);
 
     // Execute RETN (ED 45) at 0x0066
     cpu.memory.borrow_mut().write(0x0066, 0xED);
@@ -126,8 +126,8 @@ fn test_retn_restores_iff1_disabled() {
     assert_eq!(cpu.pc, 0x0000);
 
     // IFF1 should be restored from IFF2 (false)
-    assert_eq!(cpu.iff1, false);
-    assert_eq!(cpu.iff2, false);
+    assert!(!cpu.iff1);
+    assert!(!cpu.iff2);
 }
 
 #[test]
