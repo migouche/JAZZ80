@@ -124,73 +124,76 @@ fn assemble_source(code: &str) -> Result<AssemblyResult, String> {
 
         if tokens.len() == 3
             && let (Token::Identifier(name), Token::Identifier(mnemonic)) = (&tokens[0], &tokens[1])
-                && mnemonic == "EQU" {
-                    let constant_name = qualify_label(name, latest_global_label.as_deref())
-                        .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
-                    if labels.contains_key(&constant_name) {
-                        return Err(format!(
-                            "Line {}: Duplicate symbol '{}'",
-                            line_idx + 1,
-                            constant_name
-                        ));
-                    }
-                    let equ_operands = parse_operands(&tokens[2..])
-                        .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
-                    if equ_operands.len() != 1 {
-                        return Err(format!("Line {}: EQU expects one value", line_idx + 1));
-                    }
-                    let known_symbols: HashMap<String, u16> =
-                        labels.iter().map(|(k, v)| (k.clone(), v.address)).collect();
-                    let value = resolve_immediate(&equ_operands[0], &known_symbols, false)
-                        .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
-                    labels.insert(
-                        constant_name,
-                        Symbol {
-                            address: value,
-                            kind: SymbolType::Constant,
-                            source_order: line_idx,
-                        },
-                    );
-                    continue;
-                }
+            && mnemonic == "EQU"
+        {
+            let constant_name = qualify_label(name, latest_global_label.as_deref())
+                .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+            if labels.contains_key(&constant_name) {
+                return Err(format!(
+                    "Line {}: Duplicate symbol '{}'",
+                    line_idx + 1,
+                    constant_name
+                ));
+            }
+            let equ_operands = parse_operands(&tokens[2..])
+                .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+            if equ_operands.len() != 1 {
+                return Err(format!("Line {}: EQU expects one value", line_idx + 1));
+            }
+            let known_symbols: HashMap<String, u16> =
+                labels.iter().map(|(k, v)| (k.clone(), v.address)).collect();
+            let value = resolve_immediate(&equ_operands[0], &known_symbols, false)
+                .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+            labels.insert(
+                constant_name,
+                Symbol {
+                    address: value,
+                    kind: SymbolType::Constant,
+                    source_order: line_idx,
+                },
+            );
+            continue;
+        }
 
         if tokens.len() >= 2
-            && let (Token::Identifier(name), Token::Colon) = (&tokens[0], &tokens[1]) {
-                let label_name = qualify_label(name, latest_global_label.as_deref())
-                    .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
-                if labels.contains_key(&label_name) {
-                    return Err(format!(
-                        "Line {}: Duplicate label '{}'",
-                        line_idx + 1,
-                        label_name
-                    ));
-                }
-                if !name.starts_with('.') {
-                    latest_global_label = Some(label_name.clone());
-                }
-                current_label = Some(label_name.clone());
-
-                let mut sym_kind = SymbolType::Label;
-                if tokens.len() > 2
-                    && let Token::Identifier(next_mnemonic) = &tokens[2] {
-                        match next_mnemonic.as_str() {
-                            "DB" | "DEFB" => sym_kind = SymbolType::Byte,
-                            "DW" | "DEFW" => sym_kind = SymbolType::Word,
-                            "DS" | "DEFS" => sym_kind = SymbolType::Array(0),
-                            _ => {}
-                        }
-                    }
-
-                labels.insert(
-                    label_name,
-                    Symbol {
-                        address: current_pc,
-                        kind: sym_kind,
-                        source_order: line_idx,
-                    },
-                );
-                tokens.drain(0..2);
+            && let (Token::Identifier(name), Token::Colon) = (&tokens[0], &tokens[1])
+        {
+            let label_name = qualify_label(name, latest_global_label.as_deref())
+                .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
+            if labels.contains_key(&label_name) {
+                return Err(format!(
+                    "Line {}: Duplicate label '{}'",
+                    line_idx + 1,
+                    label_name
+                ));
             }
+            if !name.starts_with('.') {
+                latest_global_label = Some(label_name.clone());
+            }
+            current_label = Some(label_name.clone());
+
+            let mut sym_kind = SymbolType::Label;
+            if tokens.len() > 2
+                && let Token::Identifier(next_mnemonic) = &tokens[2]
+            {
+                match next_mnemonic.as_str() {
+                    "DB" | "DEFB" => sym_kind = SymbolType::Byte,
+                    "DW" | "DEFW" => sym_kind = SymbolType::Word,
+                    "DS" | "DEFS" => sym_kind = SymbolType::Array(0),
+                    _ => {}
+                }
+            }
+
+            labels.insert(
+                label_name,
+                Symbol {
+                    address: current_pc,
+                    kind: sym_kind,
+                    source_order: line_idx,
+                },
+            );
+            tokens.drain(0..2);
+        }
 
         tokens = qualify_local_tokens(&tokens, latest_global_label.as_deref())
             .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
@@ -221,60 +224,59 @@ fn assemble_source(code: &str) -> Result<AssemblyResult, String> {
 
         if let Some(label) = data_label
             && let Some(sym) = labels.get_mut(&label)
-                && let Token::Identifier(mnemonic) = &tokens[0] {
-                    match mnemonic.as_str() {
-                        "DB" | "DEFB" => {
-                            let contains_string = parse_operands(&tokens[1..])
-                                .map(|ops| {
-                                    ops.iter().any(|op| matches!(op, Operand::StringLiteral(_)))
-                                })
-                                .unwrap_or(false);
-                            let previous_len = if current_label.is_some()
-                                || (continuation && matches!(sym.kind, SymbolType::Label))
-                            {
-                                0
-                            } else {
-                                match sym.kind {
-                                    SymbolType::String(len) | SymbolType::Array(len) => len,
-                                    SymbolType::Byte => 1,
-                                    _ => 0,
-                                }
-                            };
-                            let row_kind = if contains_string {
-                                SymbolType::String(bytes.len())
-                            } else if bytes.len() == 1 {
-                                SymbolType::Byte
-                            } else {
-                                SymbolType::Array(bytes.len())
-                            };
+            && let Token::Identifier(mnemonic) = &tokens[0]
+        {
+            match mnemonic.as_str() {
+                "DB" | "DEFB" => {
+                    let contains_string = parse_operands(&tokens[1..])
+                        .map(|ops| ops.iter().any(|op| matches!(op, Operand::StringLiteral(_))))
+                        .unwrap_or(false);
+                    let previous_len = if current_label.is_some()
+                        || (continuation && matches!(sym.kind, SymbolType::Label))
+                    {
+                        0
+                    } else {
+                        match sym.kind {
+                            SymbolType::String(len) | SymbolType::Array(len) => len,
+                            SymbolType::Byte => 1,
+                            _ => 0,
+                        }
+                    };
+                    let row_kind = if contains_string {
+                        SymbolType::String(bytes.len())
+                    } else if bytes.len() == 1 {
+                        SymbolType::Byte
+                    } else {
+                        SymbolType::Array(bytes.len())
+                    };
 
-                            if continuation && !matches!(sym.kind, SymbolType::Label) {
-                                let row_name = format!("{}[{}]", label, line_idx + 1);
-                                labels.insert(
-                                    row_name,
-                                    Symbol {
-                                        address: current_pc,
-                                        kind: row_kind,
-                                        source_order: line_idx,
-                                    },
-                                );
-                            } else {
-                                let total_len = previous_len + bytes.len();
-                                sym.kind = if contains_string {
-                                    SymbolType::String(total_len)
-                                } else if total_len == 1 {
-                                    SymbolType::Byte
-                                } else {
-                                    SymbolType::Array(total_len)
-                                };
-                            }
-                        }
-                        "DS" | "DEFS" => {
-                            sym.kind = SymbolType::Array(bytes.len());
-                        }
-                        _ => {}
+                    if continuation && !matches!(sym.kind, SymbolType::Label) {
+                        let row_name = format!("{}[{}]", label, line_idx + 1);
+                        labels.insert(
+                            row_name,
+                            Symbol {
+                                address: current_pc,
+                                kind: row_kind,
+                                source_order: line_idx,
+                            },
+                        );
+                    } else {
+                        let total_len = previous_len + bytes.len();
+                        sym.kind = if contains_string {
+                            SymbolType::String(total_len)
+                        } else if total_len == 1 {
+                            SymbolType::Byte
+                        } else {
+                            SymbolType::Array(total_len)
+                        };
                     }
                 }
+                "DS" | "DEFS" => {
+                    sym.kind = SymbolType::Array(bytes.len());
+                }
+                _ => {}
+            }
+        }
 
         instructions.push((line_idx, current_pc, tokens));
         current_pc += bytes.len() as u16;
@@ -446,12 +448,14 @@ fn tokenize(text: &str) -> Result<Vec<Token>, String> {
                 }
 
                 // Check for 'h' suffix
-                if !is_hex && !num_str.is_empty()
+                if !is_hex
+                    && !num_str.is_empty()
                     && let Some(&nc) = chars.peek()
-                        && (nc == 'H' || nc == 'h') {
-                            is_hex = true;
-                            chars.next();
-                        }
+                    && (nc == 'H' || nc == 'h')
+                {
+                    is_hex = true;
+                    chars.next();
+                }
 
                 let val = if is_hex {
                     u16::from_str_radix(&num_str, 16).map_err(|_| "Invalid hex number")?
@@ -1024,26 +1028,28 @@ fn encode_add(
     dry: bool,
 ) -> Result<Vec<u8>, String> {
     if ops.len() == 2
-        && let Operand::Register(dest) = &ops[0] {
-            if dest == "HL"
-                && let Operand::Register(src) = &ops[1]
-                    && let Some(rpc) = get_rp_code(src) {
-                        return Ok(vec![0x09 | (rpc << 4)]);
-                    }
-            if dest == "IX" || dest == "IY" {
-                let prefix = if dest == "IX" { 0xDD } else { 0xFD };
-                if let Operand::Register(src) = &ops[1] {
-                    let pp = match src.as_str() {
-                        "BC" => 0,
-                        "DE" => 1,
-                        "IX" | "IY" => 2,
-                        "SP" => 3,
-                        _ => return Err("Invalid operand for ADD index".to_string()),
-                    };
-                    return Ok(vec![prefix, 0x09 | (pp << 4)]);
-                }
+        && let Operand::Register(dest) = &ops[0]
+    {
+        if dest == "HL"
+            && let Operand::Register(src) = &ops[1]
+            && let Some(rpc) = get_rp_code(src)
+        {
+            return Ok(vec![0x09 | (rpc << 4)]);
+        }
+        if dest == "IX" || dest == "IY" {
+            let prefix = if dest == "IX" { 0xDD } else { 0xFD };
+            if let Operand::Register(src) = &ops[1] {
+                let pp = match src.as_str() {
+                    "BC" => 0,
+                    "DE" => 1,
+                    "IX" | "IY" => 2,
+                    "SP" => 3,
+                    _ => return Err("Invalid operand for ADD index".to_string()),
+                };
+                return Ok(vec![prefix, 0x09 | (pp << 4)]);
             }
         }
+    }
     encode_alu_op(ALUOperation::ADD, ops, labels, dry)
 }
 
@@ -1054,11 +1060,12 @@ fn encode_sbc(
 ) -> Result<Vec<u8>, String> {
     if ops.len() == 2
         && let Operand::Register(dest) = &ops[0]
-            && dest == "HL"
-                && let Operand::Register(src) = &ops[1]
-                    && let Some(rpc) = get_rp_code(src) {
-                        return Ok(vec![0xED, 0x42 | (rpc << 4)]);
-                    }
+        && dest == "HL"
+        && let Operand::Register(src) = &ops[1]
+        && let Some(rpc) = get_rp_code(src)
+    {
+        return Ok(vec![0xED, 0x42 | (rpc << 4)]);
+    }
     encode_alu_op(ALUOperation::SBC, ops, labels, dry)
 }
 
@@ -1089,9 +1096,10 @@ fn encode_alu_bin(
     if ops.len() != 1 {
         if ops.len() == 2
             && let Operand::Register(r) = &ops[0]
-                && r == "A" {
-                    return encode_alu_bin(base_r, base_n, &ops[1..], labels, dry);
-                }
+            && r == "A"
+        {
+            return encode_alu_bin(base_r, base_n, &ops[1..], labels, dry);
+        }
         return Err("ALU ops count error".to_string());
     }
     match &ops[0] {
@@ -1160,17 +1168,18 @@ fn encode_jp(ops: &[Operand], labels: &HashMap<String, u16>, dry: bool) -> Resul
                 _ => None,
             };
             if let Some(c) = cond
-                && let Some(cc) = get_condition_code(c) {
-                    let nn = if matches!(
-                        &ops[1],
-                        Operand::IndirectImmediate(_) | Operand::IndirectLabel(_)
-                    ) {
-                        resolve_indirect(&ops[1], labels, dry)?
-                    } else {
-                        resolve_immediate(&ops[1], labels, dry)?
-                    };
-                    return Ok(vec![0xC2 | (cc << 3), (nn & 0xFF) as u8, (nn >> 8) as u8]);
-                }
+                && let Some(cc) = get_condition_code(c)
+            {
+                let nn = if matches!(
+                    &ops[1],
+                    Operand::IndirectImmediate(_) | Operand::IndirectLabel(_)
+                ) {
+                    resolve_indirect(&ops[1], labels, dry)?
+                } else {
+                    resolve_immediate(&ops[1], labels, dry)?
+                };
+                return Ok(vec![0xC2 | (cc << 3), (nn & 0xFF) as u8, (nn >> 8) as u8]);
+            }
             Err("Invalid JP condition/target".to_string())
         }
         _ => Err("Invalid JP args".to_string()),
@@ -1204,17 +1213,18 @@ fn encode_jr(
                 _ => None,
             };
             if let Some(c) = cond
-                && let Some(cc) = get_condition_code(c) {
-                    if cc > 3 {
-                        return Err("Invalid JR condition".to_string());
-                    }
-                    let target = resolve_immediate(&ops[1], labels, dry)?;
-                    let offset_val = (target as i32) - ((pc as i32) + 2);
-                    if !dry && !(-128..=127).contains(&offset_val) {
-                        return Err("JR offset out of range".to_string());
-                    }
-                    return Ok(vec![0x20 | (cc << 3), offset_val as i8 as u8]);
+                && let Some(cc) = get_condition_code(c)
+            {
+                if cc > 3 {
+                    return Err("Invalid JR condition".to_string());
                 }
+                let target = resolve_immediate(&ops[1], labels, dry)?;
+                let offset_val = (target as i32) - ((pc as i32) + 2);
+                if !dry && !(-128..=127).contains(&offset_val) {
+                    return Err("JR offset out of range".to_string());
+                }
+                return Ok(vec![0x20 | (cc << 3), offset_val as i8 as u8]);
+            }
             Err("Invalid JR args".to_string())
         }
         _ => Err("Invalid JR args".to_string()),
@@ -1318,9 +1328,10 @@ fn encode_ret(ops: &[Operand]) -> Result<Vec<u8>, String> {
             _ => None,
         };
         if let Some(c) = cond
-            && let Some(cc) = get_condition_code(c) {
-                return Ok(vec![0xC0 | (cc << 3)]);
-            }
+            && let Some(cc) = get_condition_code(c)
+        {
+            return Ok(vec![0xC0 | (cc << 3)]);
+        }
     }
     Err("RET args".to_string())
 }

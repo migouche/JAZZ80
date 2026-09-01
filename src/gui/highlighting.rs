@@ -86,14 +86,12 @@ pub fn highlight(
                 theme.string
             } else {
                 // Check if number
-                if clean.chars().next().is_some_and(|c| c.is_ascii_digit()) || clean.starts_with('$')
+                if clean.chars().next().is_some_and(|c| c.is_ascii_digit())
+                    || clean.starts_with('$')
                 {
                     theme.number
                 } else if clean.ends_with('H')
-                    && clean
-                        .chars()
-                        .next()
-                        .is_some_and(|c| c.is_ascii_hexdigit())
+                    && clean.chars().next().is_some_and(|c| c.is_ascii_hexdigit())
                 {
                     theme.number
                 } else {

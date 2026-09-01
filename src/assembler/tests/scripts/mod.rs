@@ -157,7 +157,11 @@ fn test_fibonacci_execution_binary() {
     let n_addr = 0x0003;
     let result_addr = 0x0004;
 
-    assert_eq!(memory.borrow().read(n_addr), 0x10, "N should be 0x10 at 0003");
+    assert_eq!(
+        memory.borrow().read(n_addr),
+        0x10,
+        "N should be 0x10 at 0003"
+    );
 
     let res_low = memory.borrow().read(result_addr);
     let res_high = memory.borrow().read(result_addr + 1);

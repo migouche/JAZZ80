@@ -345,9 +345,10 @@ impl DeviceWithUi for GenericInterruptDevice {
                     ui.horizontal(|ui| {
                         ui.label("Vector/Opcode (Hex):");
                         if ui.text_edit_singleline(&mut self.vector_input).changed()
-                            && let Ok(val) = u8::from_str_radix(&self.vector_input, 16) {
-                                self.vector = val;
-                            }
+                            && let Ok(val) = u8::from_str_radix(&self.vector_input, 16)
+                        {
+                            self.vector = val;
+                        }
                     });
 
                     ui.label(format!("Current Vector: 0x{:02X}", self.vector));
@@ -757,13 +758,14 @@ impl VirtualDOS {
     #[cfg(not(target_arch = "wasm32"))]
     fn upload_file(&mut self) {
         if let Some(path) = rfd::FileDialog::new().pick_file()
-            && let Ok(contents) = std::fs::read(&path) {
-                let name = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("upload");
-                self.fs.insert(self.child_path(name), Inode::File(contents));
-            }
+            && let Ok(contents) = std::fs::read(&path)
+        {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("upload");
+            self.fs.insert(self.child_path(name), Inode::File(contents));
+        }
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -935,13 +937,7 @@ impl DeviceWithUi for VirtualDOS {
                         self.gui_cwd = self
                             .gui_cwd
                             .rsplit_once('/')
-                            .map(|(parent, _)| {
-                                if parent.is_empty() {
-                                    "/"
-                                } else {
-                                    parent
-                                }
-                            })
+                            .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
                             .unwrap_or("/")
                             .to_string();
                     }

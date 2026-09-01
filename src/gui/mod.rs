@@ -289,28 +289,26 @@ START:
         }
 
         let code = &active_tab.code;
-        let (bytes, symbols, addr_map, line_map, image, error) = match (
-            assemble(code),
-            assemble_absolute(code),
-        ) {
-            (Ok((b, s, m, l)), Ok(image)) => (b, s, m, l, image, None),
-            (Err(e), _) => (
-                Vec::new(),
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
-                Vec::new(),
-                Some(e),
-            ),
-            (_, Err(e)) => (
-                Vec::new(),
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
-                Vec::new(),
-                Some(e),
-            ),
-        };
+        let (bytes, symbols, addr_map, line_map, image, error) =
+            match (assemble(code), assemble_absolute(code)) {
+                (Ok((b, s, m, l)), Ok(image)) => (b, s, m, l, image, None),
+                (Err(e), _) => (
+                    Vec::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    Vec::new(),
+                    Some(e),
+                ),
+                (_, Err(e)) => (
+                    Vec::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    Vec::new(),
+                    Some(e),
+                ),
+            };
 
         self.symbol_table = symbols;
         self.address_to_line = addr_map;
@@ -466,9 +464,11 @@ START:
         storage: Option<&mut (dyn eframe::Storage + 'static)>,
     ) {
         let hexdump = Self::binary_hexdump(&bytes);
-        if let Some(idx) = self.tabs.iter().position(|tab| {
-            tab.kind == EditorTabKind::Binary && tab.path.as_ref() == Some(&path)
-        }) {
+        if let Some(idx) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.kind == EditorTabKind::Binary && tab.path.as_ref() == Some(&path))
+        {
             self.active_tab = idx;
         } else {
             self.tabs.push(EditorTab {
@@ -500,15 +500,21 @@ START:
         let current_is_disposable = current_tab.path.is_none()
             && (current_tab.code.trim().is_empty() || current_tab.code == default_code)
             && !current_tab.is_dirty;
-        let binary_kind = path.extension().and_then(|e| e.to_str()).map(|ext| {
-            matches!(ext.to_ascii_lowercase().as_str(), "bin" | "rom" | "com")
-        }).unwrap_or(false);
+        let binary_kind = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "bin" | "rom" | "com"))
+            .unwrap_or(false);
 
         if current_is_disposable {
             self.tabs[self.active_tab] = EditorTab {
                 path: Some(path.clone()),
                 code: content,
-                kind: if binary_kind { EditorTabKind::Binary } else { EditorTabKind::Source },
+                kind: if binary_kind {
+                    EditorTabKind::Binary
+                } else {
+                    EditorTabKind::Source
+                },
                 is_dirty: false,
                 breakpoints: HashSet::new(),
                 binary_bytes: None,
@@ -517,7 +523,11 @@ START:
             self.tabs.push(EditorTab {
                 path: Some(path.clone()),
                 code: content,
-                kind: if binary_kind { EditorTabKind::Binary } else { EditorTabKind::Source },
+                kind: if binary_kind {
+                    EditorTabKind::Binary
+                } else {
+                    EditorTabKind::Source
+                },
                 is_dirty: false,
                 breakpoints: HashSet::new(),
                 binary_bytes: None,
@@ -743,7 +753,11 @@ START:
         }
     }
 
-    fn load_binary_file(&mut self, path: PathBuf, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
+    fn load_binary_file(
+        &mut self,
+        path: PathBuf,
+        storage: Option<&mut (dyn eframe::Storage + 'static)>,
+    ) {
         match std::fs::read(&path) {
             Ok(bytes) => {
                 self.open_binary_tab(path.clone(), bytes, storage);
@@ -1111,10 +1125,11 @@ impl eframe::App for Z80App {
                         if let Some(tab) = self.tabs.get(self.active_tab) {
                             for &bp_line in &tab.breakpoints {
                                 if let Some(&addr) = self.line_to_address.get(&bp_line)
-                                    && addr == pc {
-                                        at_bp = true;
-                                        break;
-                                    }
+                                    && addr == pc
+                                {
+                                    at_bp = true;
+                                    break;
+                                }
                             }
                         }
                         if at_bp {

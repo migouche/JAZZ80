@@ -229,7 +229,10 @@ fn test_assemble_absolute_preserves_org_addresses() {
         .copied()
         .collect::<Vec<_>>();
 
-    assert_eq!(program, vec![(0x8000, 0x3E), (0x8001, 0x2A), (0x8002, 0xC9)]);
+    assert_eq!(
+        program,
+        vec![(0x8000, 0x3E), (0x8001, 0x2A), (0x8002, 0xC9)]
+    );
 }
 
 // =================================================================================
