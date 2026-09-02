@@ -6,4 +6,5 @@ pub trait DeviceWithUi: IODevice {
     fn get_name(&self) -> String;
     fn get_window_open_state(&self) -> bool;
     fn set_window_open_state(&mut self, open: bool);
+    fn reset(&mut self) {}
 }

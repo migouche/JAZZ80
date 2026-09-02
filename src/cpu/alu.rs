@@ -68,7 +68,7 @@ pub mod rot {
     fn calculate_flags(result: u8, carry: bool) -> u8 {
         let z = result == 0;
         let s = (result & 0x80) != 0;
-        let pv = result.count_ones() % 2 == 0;
+        let pv = result.count_ones().is_multiple_of(2);
         let x = (result & 0x08) != 0;
         let y = (result & 0x20) != 0;
         // Carry is passed as parameter
@@ -225,7 +225,7 @@ pub mod alu_op {
         let s = (result & 0x80) != 0;
         let z = result == 0;
         let h = true;
-        let pv = result.count_ones() % 2 == 0;
+        let pv = result.count_ones().is_multiple_of(2);
         let n = false;
         let c = false;
         let x = (result & 0x08) != 0;
@@ -247,7 +247,7 @@ pub mod alu_op {
         let s = (result & 0x80) != 0;
         let z = result == 0;
         let h = false;
-        let pv = result.count_ones() % 2 == 0;
+        let pv = result.count_ones().is_multiple_of(2);
         let n = false;
         let c = false;
         let x = (result & 0x08) != 0;
@@ -269,7 +269,7 @@ pub mod alu_op {
         let s = (result & 0x80) != 0;
         let z = result == 0;
         let h = false;
-        let pv = result.count_ones() % 2 == 0;
+        let pv = result.count_ones().is_multiple_of(2);
         let n = false;
         let c = false;
         let x = (result & 0x08) != 0;

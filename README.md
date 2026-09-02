@@ -10,7 +10,7 @@
 
 A **Zilog Z80 CPU simulator, editor and debugger** written in Rust, built on top of [`egui`](https://github.com/emilk/egui) / [`eframe`](https://github.com/emilk/eframe). Write or load Z80 assembly, step through it instruction by instruction, and watch every register, flag and memory cell update in real time — as a native desktop app, or entirely in the browser via WebAssembly.
 
-![JAZZ80 screenshot](docs/ui.png)   
+![JAZZ80 screenshot](docs/ui.png)
 
 [![License: GPL v3](https://img.shields.io/github/license/migouche/JAZZ80?color=6a5acd)](https://github.com/migouche/JAZZ80/blob/master/LICENSE)
 [![Web demo](https://img.shields.io/badge/Web%20demo-Open%20app-6a5acd?logo=github&logoColor=white)](https://migouche.github.io/JAZZ80/)
@@ -35,6 +35,7 @@ JAZZ80 started life as a Bachelor's Thesis (*Trabajo de Fin de Grado*) at Univer
 - 🐞 **Step-by-step debugging** — run, pause, single-step, and set breakpoints anywhere in your code
 - 🔁 **Interrupts** — all three interrupt modes (IM 0/1/2) and NMIs, with dedicated buttons to trigger them on demand
 - 🧠 **Live CPU state** — inspect and hand-edit every register, including the shadow register set (`AF'`, `BC'`, `DE'`, `HL'`)
+- 🛡️ **OS-reserved shadow bank** — the bundled monitor design treats the alternate register bank as its own private state; user programs run in the main bank and should not rely on `AF'`, `BC'`, `DE'`, or `HL'`
 - 🗺️ **Memory view** — browse and edit simulator memory directly
 - 🎨 **Built-in editor** — syntax highlighting inspired by the One Dark theme
 - 💾 **Persistence** — save and reload programs, with session state preserved between runs
@@ -83,7 +84,10 @@ trunk build --release
 3. Run or single-step through execution while registers, flags and memory update live. No need to save to run!
 4. Trigger an interrupt (IM 0/1/2) or an NMI at any point using the toolbar controls.
 5. Inspect or manually edit any register, shadow register, or memory cell mid-run.
-6. Save your program and pick up where you left off later — the app persists session state between runs.
+6. The bundled monitor reserves the alternate register bank for itself; when a program is launched, the OS swaps to the main bank and user code should treat `AF'`, `BC'`, `DE'`, and `HL'` as off-limits unless you are intentionally using them as the simulator's private OS state.
+7. Save your program and pick up where you left off later — the app persists session state between runs.
+
+The bundled assembly examples are documented in the [Z80 Example Programs manual](./z80%20files/README.md), including the devices and port configuration required by each interrupt example.
 
 ## Testing
 

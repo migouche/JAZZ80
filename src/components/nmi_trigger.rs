@@ -48,15 +48,10 @@ impl DeviceWithUi for NmiTrigger {
         egui::Window::new(self.get_name())
             .open(&mut open)
             .show(ctx, |ui| {
-                if ui
+                self.triggered = ui
                     .button("TRIGGER NMI")
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .clicked()
-                {
-                    self.triggered = true;
-                } else {
-                    self.triggered = false;
-                }
+                    .clicked();
             });
         self.is_open = open;
     }

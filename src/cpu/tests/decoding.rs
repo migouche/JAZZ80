@@ -1409,7 +1409,7 @@ fn test_opcode_range(
     for opcode in opcode_range {
         test_opcode(
             starting_pc,
-            &[prefixes, &[opcode], suffixes].concat().as_slice(),
+            [prefixes, &[opcode], suffixes].concat().as_slice(),
             expected_logs,
         );
     }

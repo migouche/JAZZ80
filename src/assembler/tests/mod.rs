@@ -1,4 +1,6 @@
-use crate::assembler::{Operand, Token, assemble, parse_operands, tokenize};
+use crate::assembler::{
+    Operand, Token, assemble, assemble_absolute, assemble_binary, parse_operands, tokenize,
+};
 
 mod ddcb_fdcb;
 mod ds_test;
@@ -177,6 +179,24 @@ fn test_parse_operands_labels_conditions() {
 }
 
 #[test]
+fn test_local_labels_use_latest_global_scope() {
+    let (bytes, symbols, _, _) =
+        assemble("FOO: JP .DONE\n.BODY: NOP\n.DONE: JP .BODY\nBAR: JP .DONE\n.DONE: NOP").unwrap();
+
+    assert_eq!(
+        bytes,
+        vec![
+            0xC3, 0x04, 0x00, 0x00, 0xC3, 0x03, 0x00, 0xC3, 0x0A, 0x00, 0x00
+        ]
+    );
+    assert_eq!(symbols["FOO"].address, 0);
+    assert_eq!(symbols["FOO.DONE"].address, 4);
+    assert_eq!(symbols["FOO.BODY"].address, 3);
+    assert_eq!(symbols["BAR"].address, 7);
+    assert_eq!(symbols["BAR.DONE"].address, 10);
+}
+
+#[test]
 fn test_parse_operands_errors() {
     assert!(parse_operands(&tokenize("A B").unwrap()).is_err()); // missing comma
     assert!(parse_operands(&tokenize("-").unwrap()).is_err()); // minus no number
@@ -185,6 +205,34 @@ fn test_parse_operands_errors() {
     assert!(parse_operands(&tokenize("(IX+").unwrap()).is_err()); // missing offset
     assert!(parse_operands(&tokenize("(IX+A)").unwrap()).is_err()); // invalid offset
     assert!(parse_operands(&tokenize("()").unwrap()).is_err()); // empty parens
+}
+
+#[test]
+fn test_assemble_binary_preserves_org_padding() {
+    let bytes = assemble_binary("ORG 0000h\nDB 1\nORG 0003h\nDB 2").unwrap();
+    assert_eq!(bytes, vec![1, 0, 0, 2]);
+}
+
+#[test]
+fn test_assemble_binary_includes_initial_org_padding() {
+    let bytes = assemble_binary("ORG 8000h\nLD A, 42\nRET").unwrap();
+    assert_eq!(bytes, vec![0x3E, 0x2A, 0xC9]);
+}
+
+#[test]
+fn test_assemble_absolute_preserves_org_addresses() {
+    let image = assemble_absolute("ORG 8000h\nLD A, 42\nRET").unwrap();
+    let program = image
+        .iter()
+        .filter(|(addr, _)| *addr >= 0x8000)
+        .take(3)
+        .copied()
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        program,
+        vec![(0x8000, 0x3E), (0x8001, 0x2A), (0x8002, 0xC9)]
+    );
 }
 
 // =================================================================================
@@ -543,4 +591,38 @@ fn test_extensive_error_coverage() {
     // IN/OUT
     asm_err("IN (HL), A"); // IN can be IN A, (n) or IN r, (C). Not (HL)
     asm_err("OUT (BC), A"); // OUT can be OUT (n), A or OUT (C), r. Not (BC)
+}
+
+#[test]
+fn assemble_file_test() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("z80 files")
+        .join("program.asm");
+    let code = std::fs::read_to_string(path).expect("failed to read program.asm");
+    let bytes = assemble_binary(&code).expect("failed to assemble program.asm");
+
+    let expected_bytes = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("z80 files")
+            .join("program.bin"),
+    )
+    .expect("failed to read program.bin");
+    assert_eq!(bytes, expected_bytes);
+}
+
+#[test]
+fn assemble_fib_test() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("z80 files")
+        .join("fib.asm");
+    let code = std::fs::read_to_string(path).expect("failed to read fib.asm");
+    let bytes = assemble_binary(&code).expect("failed to assemble fib.asm");
+
+    let expected_bytes = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("z80 files")
+            .join("fib.bin"),
+    )
+    .expect("failed to read fib.bin");
+    assert_eq!(bytes, expected_bytes);
 }

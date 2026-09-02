@@ -1,6 +1,87 @@
+use super::nmi_trigger::NmiTrigger;
 use crate::traits::IODevice;
 use crate::ui_traits::DeviceWithUi;
 use eframe::egui;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::rc::Rc;
+#[cfg(target_arch = "wasm32")]
+use std::sync::mpsc::{self, Receiver};
+
+pub struct DeviceDefinition {
+    pub menu_name: &'static str,
+    pub default_port: &'static str,
+    pub create: fn(u16) -> Rc<RefCell<dyn DeviceWithUi>>,
+}
+
+fn create_keypad(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
+    Rc::new(RefCell::new(Keypad::new(port)))
+}
+
+fn create_display(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
+    Rc::new(RefCell::new(SevenSegmentDisplay::new(port)))
+}
+
+fn create_lcd_display(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
+    Rc::new(RefCell::new(LcdDisplay::new(port)))
+}
+
+fn create_interrupt_controller(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
+    Rc::new(RefCell::new(GenericInterruptDevice::new(port)))
+}
+
+fn create_virtual_terminal(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
+    Rc::new(RefCell::new(VirtualTerminal::new(port)))
+}
+
+fn create_virtual_file_system(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
+    Rc::new(RefCell::new(VirtualDOS::new(port)))
+}
+
+fn create_nmi_trigger(_port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
+    Rc::new(RefCell::new(NmiTrigger::new()))
+}
+
+pub fn device_definitions() -> &'static [DeviceDefinition] {
+    &[
+        DeviceDefinition {
+            menu_name: "Add Keypad",
+            default_port: "1",
+            create: create_keypad,
+        },
+        DeviceDefinition {
+            menu_name: "Add Display",
+            default_port: "2",
+            create: create_display,
+        },
+        DeviceDefinition {
+            menu_name: "Add LCD Display",
+            default_port: "3",
+            create: create_lcd_display,
+        },
+        DeviceDefinition {
+            menu_name: "Add Interrupt Controller",
+            default_port: "0",
+            create: create_interrupt_controller,
+        },
+        DeviceDefinition {
+            menu_name: "Add Virtual Terminal",
+            default_port: "0",
+            create: create_virtual_terminal,
+        },
+        DeviceDefinition {
+            menu_name: "Add DOS Controller",
+            default_port: "20",
+            create: create_virtual_file_system,
+        },
+        DeviceDefinition {
+            menu_name: "Add NMI Trigger",
+            default_port: "0",
+            create: create_nmi_trigger,
+        },
+    ]
+}
 
 pub struct SevenSegmentDisplay {
     port: u16,
@@ -263,10 +344,10 @@ impl DeviceWithUi for GenericInterruptDevice {
 
                     ui.horizontal(|ui| {
                         ui.label("Vector/Opcode (Hex):");
-                        if ui.text_edit_singleline(&mut self.vector_input).changed() {
-                            if let Ok(val) = u8::from_str_radix(&self.vector_input, 16) {
-                                self.vector = val;
-                            }
+                        if ui.text_edit_singleline(&mut self.vector_input).changed()
+                            && let Ok(val) = u8::from_str_radix(&self.vector_input, 16)
+                        {
+                            self.vector = val;
                         }
                     });
 
@@ -330,7 +411,7 @@ impl IODevice for LcdDisplay {
     fn write_out(&mut self, port: u16, data: u8) -> bool {
         if (port & 0xFF) == (self.port & 0xFF) {
             let ch = data as char;
-            if ch == '\n' || (ch >= ' ' && ch <= '~') {
+            if ch == '\n' || (' '..='~').contains(&ch) {
                 self.display_buffer.push(ch);
             } else {
                 self.display_buffer.push('.');
@@ -383,6 +464,522 @@ impl DeviceWithUi for LcdDisplay {
                 ui.separator();
                 ui.label(format!("Input Index: {}", self.input_index));
             });
+        self.is_open = open;
+    }
+}
+
+pub struct VirtualTerminal {
+    port: u16,
+    rx_queue: VecDeque<u8>,
+    tx_buffer: String,
+    control_sequence: Vec<u8>,
+    // UI temporary state for user input
+    input_string: String,
+    is_open: bool,
+}
+
+impl VirtualTerminal {
+    pub fn new(port: u16) -> Self {
+        Self {
+            port,
+            rx_queue: VecDeque::new(),
+            tx_buffer: String::new(),
+            control_sequence: Vec::new(),
+            input_string: String::new(),
+            is_open: true,
+        }
+    }
+}
+
+impl IODevice for VirtualTerminal {
+    fn read_in(&mut self, port: u16) -> Option<u8> {
+        let p = port & 0xFF;
+        let base = self.port & 0xFF;
+        let status_port = base.wrapping_add(1) & 0xFF;
+
+        if p == base {
+            // Data Port: Pop the next character from the user's input
+            Some(self.rx_queue.pop_front().unwrap_or(0))
+        } else if p == status_port {
+            // Status Port: Tell the OS if it should bother reading
+            let mut status = 0x02; // Bit 1 = Ready to transmit (always true here)
+            if !self.rx_queue.is_empty() {
+                status |= 0x01; // Bit 0 = Data available to receive
+            }
+            Some(status)
+        } else {
+            None
+        }
+    }
+
+    fn write_out(&mut self, port: u16, data: u8) -> bool {
+        let p = port & 0xFF;
+        let base = self.port & 0xFF;
+        let status_port = base.wrapping_add(1) & 0xFF;
+
+        if p == base {
+            self.write_terminal_byte(data);
+            true
+        } else if p == status_port {
+            // Ignore writes to the status port, but acknowledge them as handled
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl VirtualTerminal {
+    fn write_terminal_byte(&mut self, data: u8) {
+        // TODO: Make this more robust to handle other sequences and partial sequences
+        const CLEAR_SCREEN: &[u8] = b"\x1b[2J\x1b[H";
+        if self.control_sequence.is_empty() && data != 0x1B {
+            self.append_display_byte(data);
+            return;
+        }
+
+        self.control_sequence.push(data);
+        if self.control_sequence == CLEAR_SCREEN {
+            self.tx_buffer.clear();
+            self.control_sequence.clear();
+        } else if !CLEAR_SCREEN.starts_with(&self.control_sequence) {
+            let sequence = std::mem::take(&mut self.control_sequence);
+            for byte in sequence {
+                self.append_display_byte(byte);
+            }
+        }
+    }
+
+    fn append_display_byte(&mut self, data: u8) {
+        let ch = data as char;
+        if ch == '\n' || ch == '\r' || (' '..='~').contains(&ch) {
+            self.tx_buffer.push(ch);
+        } else {
+            self.tx_buffer.push('.');
+        }
+    }
+}
+
+impl DeviceWithUi for VirtualTerminal {
+    fn get_name(&self) -> String {
+        format!(
+            "OS Terminal (Ports 0x{:02X}-0x{:02X})",
+            self.port & 0xFF,
+            (self.port.wrapping_add(1)) & 0xFF
+        )
+    }
+
+    fn get_window_open_state(&self) -> bool {
+        self.is_open
+    }
+
+    fn set_window_open_state(&mut self, open: bool) {
+        self.is_open = open;
+    }
+
+    fn draw(&mut self, ctx: &egui::Context) {
+        let mut open = self.is_open;
+        egui::Window::new(self.get_name())
+            .open(&mut open)
+            .min_width(350.0)
+            .show(ctx, |ui| {
+                ui.label("OS Output:");
+
+                // Render the text sent by the Z80 OS
+                egui::ScrollArea::vertical()
+                    .max_height(200.0)
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.tx_buffer.as_str())
+                                .font(egui::TextStyle::Monospace)
+                                .desired_width(f32::INFINITY)
+                                .interactive(false),
+                        );
+                    });
+
+                if ui.button("Clear Output").clicked() {
+                    self.tx_buffer.clear();
+                }
+
+                ui.separator();
+                ui.label("Send Input to OS:");
+
+                ui.horizontal(|ui| {
+                    let response = ui.add(
+                        egui::TextEdit::singleline(&mut self.input_string)
+                            .hint_text("Type and press Enter...")
+                            .desired_width(200.0),
+                    );
+
+                    let send_clicked = ui.button("Send").clicked();
+
+                    // Trigger when the user clicks 'Send' or hits the Enter key
+                    if send_clicked
+                        || (response.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter)))
+                    {
+                        // Push typed bytes into the hardware queue
+                        for byte in self.input_string.bytes() {
+                            self.rx_queue.push_back(byte);
+                        }
+                        // Add a carriage return so the OS knows the command is done
+                        self.rx_queue.push_back(b'\r');
+
+                        self.input_string.clear();
+                        response.request_focus(); // Keep focus so you can keep typing
+                    }
+                });
+            });
+        self.is_open = open;
+    }
+
+    fn reset(&mut self) {
+        self.rx_queue.clear();
+        self.tx_buffer.clear();
+        self.control_sequence.clear();
+        self.input_string.clear();
+    }
+}
+
+#[derive(Clone)]
+enum Inode {
+    File(Vec<u8>),
+    Directory,
+}
+
+pub struct VirtualDOS {
+    port: u16,
+    fs: HashMap<String, Inode>,
+    cwd: String,
+    gui_cwd: String,
+
+    // Hardware communication buffers
+    arg_buffer: String,
+    out_queue: VecDeque<u8>,
+    status: u8, // 0 = OK, 1 = Error, 2 = Data Ready
+    is_open: bool,
+    new_directory: String,
+    #[cfg(target_arch = "wasm32")]
+    upload_receiver: Option<Receiver<(String, Vec<u8>)>>,
+}
+
+impl VirtualDOS {
+    pub fn new(port: u16) -> Self {
+        let mut fs = HashMap::new();
+        fs.insert("/".to_string(), Inode::Directory); // Root always exists
+
+        Self {
+            port,
+            fs,
+            cwd: "/".to_string(),
+            gui_cwd: "/".to_string(),
+            arg_buffer: String::new(),
+            out_queue: VecDeque::new(),
+            status: 0,
+            is_open: true,
+            new_directory: String::new(),
+            #[cfg(target_arch = "wasm32")]
+            upload_receiver: None,
+        }
+    }
+
+    // Helper to resolve paths like "FOO", "../BAR", or "/ROOT"
+    fn resolve_path_from(&self, path: &str, cwd: &str) -> String {
+        let path = path.trim();
+        if path == "/" {
+            return "/".to_string();
+        }
+
+        let mut parts: Vec<&str> = if path.starts_with('/') {
+            Vec::new()
+        } else {
+            cwd.split('/').filter(|s| !s.is_empty()).collect()
+        };
+
+        for p in path.split('/') {
+            match p {
+                "" | "." => continue,
+                ".." => {
+                    parts.pop();
+                }
+                _ => parts.push(p),
+            }
+        }
+
+        if parts.is_empty() {
+            return "/".to_string();
+        }
+        format!("/{}", parts.join("/"))
+    }
+
+    fn resolve_path(&self, path: &str) -> String {
+        self.resolve_path_from(path, &self.cwd)
+    }
+
+    fn child_path(&self, name: &str) -> String {
+        self.resolve_path_from(name.trim_matches('/'), &self.gui_cwd)
+    }
+
+    fn create_directory(&mut self, name: &str) {
+        let name = name.trim();
+        if !name.is_empty() && !name.contains('/') {
+            self.fs.insert(self.child_path(name), Inode::Directory);
+        }
+    }
+
+    fn direct_children(&self) -> Vec<(String, bool, usize)> {
+        let prefix = if self.gui_cwd == "/" {
+            "/".to_string()
+        } else {
+            format!("{}/", self.gui_cwd)
+        };
+        let mut children = Vec::new();
+
+        for (path, inode) in &self.fs {
+            if path.starts_with(&prefix) {
+                let remainder = &path[prefix.len()..];
+                if !remainder.is_empty() && !remainder.contains('/') {
+                    let size = match inode {
+                        Inode::Directory => 0,
+                        Inode::File(contents) => contents.len(),
+                    };
+                    children.push((
+                        remainder.to_string(),
+                        matches!(inode, Inode::Directory),
+                        size,
+                    ));
+                }
+            }
+        }
+        children.sort_by_key(|left| left.0.to_lowercase());
+        children
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn upload_file(&mut self) {
+        if let Some(path) = rfd::FileDialog::new().pick_file()
+            && let Ok(contents) = std::fs::read(&path)
+        {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("upload");
+            self.fs.insert(self.child_path(name), Inode::File(contents));
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn upload_file(&mut self) {
+        if self.upload_receiver.is_some() {
+            return;
+        }
+
+        let task = rfd::AsyncFileDialog::new().pick_file();
+        let (sender, receiver) = mpsc::channel();
+        self.upload_receiver = Some(receiver);
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Some(file) = task.await {
+                let name = file.file_name();
+                let contents = file.read().await;
+                let _ = sender.send((name, contents));
+            }
+        });
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn finish_upload(&mut self) {
+        let result = self
+            .upload_receiver
+            .as_ref()
+            .and_then(|receiver| receiver.try_recv().ok());
+        if let Some((name, contents)) = result {
+            self.fs
+                .insert(self.child_path(&name), Inode::File(contents));
+            self.upload_receiver = None;
+        }
+    }
+}
+
+impl IODevice for VirtualDOS {
+    fn read_in(&mut self, port: u16) -> Option<u8> {
+        let p = port & 0xFF;
+        let base = self.port & 0xFF;
+
+        if p == base {
+            // Read output data (e.g., from an LS command)
+            if let Some(b) = self.out_queue.pop_front() {
+                if self.out_queue.is_empty() {
+                    self.status = 0;
+                } // Clear Data Ready flag
+                Some(b)
+            } else {
+                Some(0)
+            }
+        } else if p == base.wrapping_add(2) {
+            // Read Status (0=OK, 1=Error, 2=Data Ready)
+            Some(self.status)
+        } else {
+            None
+        }
+    }
+
+    fn write_out(&mut self, port: u16, data: u8) -> bool {
+        let p = port & 0xFF;
+        let base = self.port & 0xFF;
+
+        if p == base {
+            // Push to argument buffer
+            self.arg_buffer.push(data as char);
+            true
+        } else if p == base.wrapping_add(1) {
+            // Execute Command
+            match data {
+                0 => {
+                    // Clear Buffer
+                    self.arg_buffer.clear();
+                    self.out_queue.clear();
+                    self.status = 0;
+                }
+                1 => {
+                    // MKDIR
+                    let target = self.resolve_path(&self.arg_buffer);
+                    self.fs.insert(target, Inode::Directory);
+                    self.status = 0;
+                }
+                2 => {
+                    // CD
+                    let target = self.resolve_path(&self.arg_buffer);
+                    if let Some(Inode::Directory) = self.fs.get(&target) {
+                        self.cwd = target;
+                        self.status = 0;
+                    } else {
+                        self.status = 1; // Error: Not a directory
+                    }
+                }
+                3 => {
+                    // LS
+                    let mut listing = String::new();
+                    let prefix = if self.cwd == "/" {
+                        "/".to_string()
+                    } else {
+                        format!("{}/", self.cwd)
+                    };
+
+                    for (path, inode) in &self.fs {
+                        if path.starts_with(&prefix) {
+                            let remainder = &path[prefix.len()..];
+                            // Only list direct children, not subdirectories
+                            if !remainder.contains('/') && !remainder.is_empty() {
+                                let label = match inode {
+                                    Inode::Directory => "[DIR] ",
+                                    Inode::File(_) => "[FILE]",
+                                };
+                                listing.push_str(&format!("{} {}\r\n", label, remainder));
+                            }
+                        }
+                    }
+                    if listing.is_empty() {
+                        listing.push_str("Empty\r\n");
+                    }
+
+                    self.out_queue.extend(listing.bytes());
+                    self.status = if self.out_queue.is_empty() { 0 } else { 2 }; // Set Data Ready
+                }
+                4 => {
+                    let target = self.resolve_path(&self.arg_buffer);
+                    match self.fs.get(&target) {
+                        Some(Inode::File(contents)) => {
+                            self.out_queue.extend(contents.iter().cloned());
+                            self.status = if self.out_queue.is_empty() { 0 } else { 2 };
+                        }
+                        _ => {
+                            self.status = 1; // Error: not found or is a directory
+                        }
+                    }
+                }
+                _ => {}
+            }
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl DeviceWithUi for VirtualDOS {
+    fn get_name(&self) -> String {
+        format!("DOS Controller (Port 0x{:02X})", self.port & 0xFF)
+    }
+    fn get_window_open_state(&self) -> bool {
+        self.is_open
+    }
+    fn set_window_open_state(&mut self, open: bool) {
+        self.is_open = open;
+    }
+
+    fn draw(&mut self, ctx: &egui::Context) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.finish_upload();
+            if self.upload_receiver.is_some() {
+                ctx.request_repaint();
+            }
+        }
+
+        let mut open = self.is_open;
+        let mut upload_requested = false;
+        egui::Window::new(self.get_name())
+            .open(&mut open)
+            .min_width(420.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Up").clicked() && self.gui_cwd != "/" {
+                        self.gui_cwd = self
+                            .gui_cwd
+                            .rsplit_once('/')
+                            .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
+                            .unwrap_or("/")
+                            .to_string();
+                    }
+                    ui.monospace(self.gui_cwd.to_string());
+                    if ui.button("Upload file...").clicked() {
+                        upload_requested = true;
+                    }
+                });
+                ui.separator();
+
+                egui::ScrollArea::vertical()
+                    .max_height(220.0)
+                    .show(ui, |ui| {
+                        for (name, is_directory, size) in self.direct_children() {
+                            ui.horizontal(|ui| {
+                                if is_directory {
+                                    if ui.button(format!("[DIR] {}", name)).clicked() {
+                                        self.gui_cwd = self.child_path(&name);
+                                    }
+                                } else {
+                                    ui.label(format!("[FILE] {} ({} bytes)", name, size));
+                                }
+                            });
+                        }
+                    });
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.text_edit_singleline(&mut self.new_directory);
+                    if ui.button("Create folder").clicked() {
+                        let name = std::mem::take(&mut self.new_directory);
+                        self.create_directory(&name);
+                    }
+                });
+                #[cfg(target_arch = "wasm32")]
+                if self.upload_receiver.is_some() {
+                    ui.label("Waiting for file...");
+                }
+            });
+        if upload_requested {
+            self.upload_file();
+        }
         self.is_open = open;
     }
 }

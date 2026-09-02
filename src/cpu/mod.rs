@@ -1459,7 +1459,7 @@ impl Z80A {
         }
     }
 
-    fn decode_unprefixed(&mut self, opcode: u8, addressing: PrefixAddressing) -> () {
+    fn decode_unprefixed(&mut self, opcode: u8, addressing: PrefixAddressing) {
         //test_log!(self, "decode_unprefixed");
         match addressing {
             PrefixAddressing::HL => test_log!(self, "decode_unprefixed"),
@@ -1831,14 +1831,13 @@ impl Z80A {
                         test_log!(self, "OUT (n), A");
                         let n = self.fetch();
                         let a = self.get_register(GPR::A);
-                        let port = ((a as u16) << 8) | (n as u16);
+                        let port = n as u16;
                         self.write_io(port, a);
                     }
                     3 => {
                         test_log!(self, "IN A, (n)");
                         let n = self.fetch();
-                        let a = self.get_register(GPR::A);
-                        let port = ((a as u16) << 8) | (n as u16);
+                        let port = n as u16;
                         let val = self.read_io(port);
                         self.set_register(GPR::A, val);
                     }
@@ -1933,7 +1932,7 @@ impl Z80A {
         }
     }
 
-    fn decode_cb(&mut self, opcode: u8) -> () {
+    fn decode_cb(&mut self, opcode: u8) {
         test_log!(self, "decode_cb");
         let (x, y, z, _p, _q) = decode_opcode(opcode);
         match x {
@@ -1963,7 +1962,7 @@ impl Z80A {
         }
     }
 
-    fn decode_ed(&mut self, opcode: u8) -> () {
+    fn decode_ed(&mut self, opcode: u8) {
         test_log!(self, "decode_ed");
         let (x, y, z, p, q) = decode_opcode(opcode);
 
@@ -1987,7 +1986,7 @@ impl Z80A {
                         self.set_flag(val == 0, Flag::Z);
                         self.set_flag(false, Flag::H);
                         self.set_flag(false, Flag::N);
-                        self.set_flag(val.count_ones() % 2 == 0, Flag::PV);
+                        self.set_flag(val.count_ones().is_multiple_of(2), Flag::PV);
                     } else if y < 8 {
                         test_log!(self, "IN r[y], (C)");
                         let reg = self.table_r(y);
@@ -2001,7 +2000,7 @@ impl Z80A {
                         self.set_flag(val == 0, Flag::Z);
                         self.set_flag(false, Flag::H);
                         self.set_flag(false, Flag::N);
-                        self.set_flag(val.count_ones() % 2 == 0, Flag::PV);
+                        self.set_flag(val.count_ones().is_multiple_of(2), Flag::PV);
                     } else {
                         unreachable!("Invalid y value") // should never happen
                     }
@@ -2171,7 +2170,7 @@ impl Z80A {
 
                         let s = (new_a & flags::SIGN) != 0;
                         let z = new_a == 0;
-                        let p = new_a.count_ones() % 2 == 0;
+                        let p = new_a.count_ones().is_multiple_of(2);
                         let x = (new_a & flags::X) != 0;
                         let y = (new_a & flags::Y) != 0;
 
@@ -2201,7 +2200,7 @@ impl Z80A {
 
                         let s = (new_a & flags::SIGN) != 0;
                         let z = new_a == 0;
-                        let p = new_a.count_ones() % 2 == 0;
+                        let p = new_a.count_ones().is_multiple_of(2);
                         let x = (new_a & flags::X) != 0;
                         let y = (new_a & flags::Y) != 0;
 
@@ -2344,7 +2343,7 @@ impl Z80A {
         }
     }
 
-    fn decode(&mut self, opcode: u8) -> () {
+    fn decode(&mut self, opcode: u8) {
         match opcode {
             0xCB => {
                 let op = self.fetch();
@@ -2466,7 +2465,7 @@ impl Z80A {
 
         self.set_flag((a & flags::SIGN) == flags::SIGN, Flag::S);
         self.set_flag(a == 0, Flag::Z);
-        self.set_flag(a.count_ones() % 2 == 0, Flag::PV);
+        self.set_flag(a.count_ones().is_multiple_of(2), Flag::PV);
         self.set_flag((a & flags::X) == flags::X, Flag::X);
         self.set_flag((a & flags::Y) == flags::Y, Flag::Y);
     }

@@ -130,6 +130,51 @@ END:
 }
 
 #[test]
+fn test_fibonacci_execution_binary() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("z80 files")
+        .join("fib.bin");
+    let bytes = std::fs::read(path).expect("failed to read fib.bin");
+
+    let memory: Rc<RefCell<dyn MemoryMapper>> = Rc::new(RefCell::new(Mem64k::new()));
+    let mut cpu = Z80A::new(memory.clone());
+
+    {
+        let mut mem = memory.borrow_mut();
+        for (i, b) in bytes.iter().enumerate() {
+            mem.write(i as u16, *b);
+        }
+    }
+
+    let mut cycles = 0;
+    while !cpu.is_halted() && cycles < 100_000 {
+        cpu.tick();
+        cycles += 1;
+    }
+
+    assert!(cpu.is_halted(), "CPU did not halt within limit");
+
+    let n_addr = 0x0003;
+    let result_addr = 0x0004;
+
+    assert_eq!(
+        memory.borrow().read(n_addr),
+        0x10,
+        "N should be 0x10 at 0003"
+    );
+
+    let res_low = memory.borrow().read(result_addr);
+    let res_high = memory.borrow().read(result_addr + 1);
+    let res = u16::from_le_bytes([res_low, res_high]);
+
+    assert_eq!(
+        res, 610,
+        "Binary Fibonacci result incorrect: expected 610, got {}",
+        res
+    );
+}
+
+#[test]
 fn test_pv_hc() {
     let code = r#"
                 LD A, 0x7F    ; Load 127 into A

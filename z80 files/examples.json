@@ -3,5 +3,6 @@
   "im0.asm",
   "im1.asm",
   "im2.asm",
-  "nmi.asm"
+  "nmi.asm",
+  "os.asm"
 ]

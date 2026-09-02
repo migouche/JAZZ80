@@ -57,6 +57,7 @@ fn test_in_a_n(#[case] port: u8, #[case] value: u8) {
     let mut cpu = setup_cpu();
     let device = Rc::new(RefCell::new(MockIODevice::new(port as u16, vec![value])));
     cpu.attach_device(device.clone());
+    cpu.set_register(GPR::A, 0xAA);
 
     // Opcode: DB n (IN A, (n))
     cpu.memory.borrow_mut().write(0x0000, 0xDB);
@@ -220,8 +221,8 @@ fn test_block_io_step(#[case] opcode: u8, #[case] is_in: bool, #[case] inc_hl: b
     let expected_hl = if inc_hl { 0x1001 } else { 0x0FFF };
     assert_eq!(cpu.get_register_pair(RegisterPair::HL), expected_hl);
 
-    assert_eq!(cpu.get_flag(Flag::Z), false);
-    assert_eq!(cpu.get_flag(Flag::N), true); // Block IO instructions set N
+    assert!(!cpu.get_flag(Flag::Z));
+    assert!(cpu.get_flag(Flag::N)); // Block IO instructions set N
 }
 
 #[rstest]
@@ -242,7 +243,7 @@ fn test_block_io_zero_flag(#[case] opcode: u8) {
     cpu.tick();
 
     assert_eq!(cpu.get_register(GPR::B), 0x00);
-    assert_eq!(cpu.get_flag(Flag::Z), true);
+    assert!(cpu.get_flag(Flag::Z));
 }
 
 #[rstest]
@@ -283,7 +284,7 @@ fn test_block_io_repeat(#[case] opcode: u8, #[case] is_in: bool, #[case] inc_hl:
     cpu.tick();
 
     assert_eq!(cpu.get_register(GPR::B), 0x01);
-    assert_eq!(cpu.get_flag(Flag::Z), false);
+    assert!(!cpu.get_flag(Flag::Z));
     assert_eq!(cpu.pc, 0x0000, "Should repeat");
 
     if is_in {
@@ -296,7 +297,7 @@ fn test_block_io_repeat(#[case] opcode: u8, #[case] is_in: bool, #[case] inc_hl:
     cpu.tick();
 
     assert_eq!(cpu.get_register(GPR::B), 0x00);
-    assert_eq!(cpu.get_flag(Flag::Z), true);
+    assert!(cpu.get_flag(Flag::Z));
     assert_ne!(cpu.pc, 0x0000, "Should advance");
 
     // Address check

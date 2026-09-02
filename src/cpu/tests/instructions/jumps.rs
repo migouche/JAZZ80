@@ -73,7 +73,7 @@ fn test_jr_d(#[case] starting_pc: u16, #[case] displacement: u8, #[case] expecte
     cpu.memory.borrow_mut().write(cpu.pc, JR_D_OPCODE); // JR d opcode
     cpu.memory
         .borrow_mut()
-        .write(cpu.pc.wrapping_add(1), displacement as u8);
+        .write(cpu.pc.wrapping_add(1), displacement);
     cpu.tick(); // Fetch JR d
 
     assert_eq!(
@@ -106,7 +106,7 @@ fn test_jr_cc_d(
     cpu.memory.borrow_mut().write(cpu.pc, opcode); // JR cc[y-4], d opcode
     cpu.memory
         .borrow_mut()
-        .write(cpu.pc.wrapping_add(1), displacement as u8);
+        .write(cpu.pc.wrapping_add(1), displacement);
     cpu.tick(); // Fetch JR cc[y-4], d
 
     assert_eq!(
