@@ -88,7 +88,7 @@ Add these devices at their defaults:
 | Device | Ports | Purpose |
 | --- | --- | --- |
 | Virtual Terminal | `0x00-0x01` | Port `0x00` carries characters; port `0x01` reports transmit readiness and received input. |
-| DOS Controller | `0x10-0x12` | Port `0x10` carries data, `0x11` selects commands, and `0x12` reports status. |
+| DOS Controller | `0x20-0x22` | Port `0x20` carries data, `0x21` selects commands, and `0x22` reports status. |
 
 Type commands into the Virtual Terminal window. Files can be created or uploaded through the DOS Controller window. The monitor keeps its own state in the alternate register bank, so programs launched with `RUN` should treat `AF'`, `BC'`, `DE'`, and `HL'` as reserved.
 
@@ -132,9 +132,9 @@ Default ports:
 
 | Port | Role |
 | --- | --- |
-| `0x10` | Data and command-argument bytes |
-| `0x11` | Command register |
-| `0x12` | Status register |
+| `0x20` | Data and command-argument bytes |
+| `0x21` | Command register |
+| `0x22` | Status register |
 
 The command values used by `os.asm` are `0` to clear the argument buffer, `1` for `MKDIR`, `2` for `CD`, `3` for `LS`, and `4` for file reads used by `TYPE` and `RUN`. The device window lets you browse directories, create folders, and upload files.
 
