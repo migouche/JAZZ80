@@ -2,7 +2,7 @@ use rstest::rstest;
 
 use crate::cpu::tests::setup_cpu;
 use crate::cpu::{Flag, GPR, RegisterPair};
-use crate::traits::SyncronousComponent;
+use crate::traits::SynchronousComponent;
 
 // this only tests carry flag because its old :C
 // there are more extensive tests for the rotation functions in alu_tests.rs

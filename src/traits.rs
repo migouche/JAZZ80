@@ -1,4 +1,4 @@
-pub trait SyncronousComponent {
+pub trait SynchronousComponent {
     fn tick(&mut self);
 }
 

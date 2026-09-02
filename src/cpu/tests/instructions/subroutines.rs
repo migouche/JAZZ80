@@ -1,6 +1,6 @@
 use crate::{
     cpu::{Condition, GPR, tests::setup_cpu},
-    traits::SyncronousComponent,
+    traits::SynchronousComponent,
 };
 use rstest::rstest;
 

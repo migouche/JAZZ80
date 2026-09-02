@@ -49,32 +49,20 @@ pub struct Symbol {
     pub source_order: usize,
 }
 
-struct AssemblyResult {
-    bytes: Vec<u8>,
-    symbols: HashMap<String, Symbol>,
-    address_to_line: HashMap<u16, usize>,
-    line_to_address: HashMap<usize, u16>,
-    image: Vec<(u16, u8)>,
+#[derive(Debug, Clone)]
+pub struct AssemblyLine {
+    pub address: u16,
+    pub bytes: Vec<u8>,
 }
 
-pub fn assemble(
-    code: &str,
-) -> Result<
-    (
-        Vec<u8>,
-        HashMap<String, Symbol>,
-        HashMap<u16, usize>,
-        HashMap<usize, u16>,
-    ),
-    String,
-> {
-    let result = assemble_source(code)?;
-    Ok((
-        result.bytes,
-        result.symbols,
-        result.address_to_line,
-        result.line_to_address,
-    ))
+#[derive(Debug, Clone)]
+pub struct AssemblyResult {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) symbols: HashMap<String, Symbol>,
+    pub(crate) address_to_line: HashMap<u16, usize>,
+    pub(crate) line_to_address: HashMap<usize, u16>,
+    pub(crate) image: Vec<(u16, u8)>,
+    pub lines: HashMap<usize, AssemblyLine>,
 }
 
 pub fn assemble_binary(code: &str) -> Result<Vec<u8>, String> {
@@ -82,11 +70,9 @@ pub fn assemble_binary(code: &str) -> Result<Vec<u8>, String> {
     let Some(first_address) = image.iter().map(|(address, _)| *address).min() else {
         return Ok(Vec::new());
     };
-    let highest_address = image
-        .iter()
-        .map(|(address, _)| *address)
-        .max()
-        .expect("image is known to be non-empty");
+    let Some(highest_address) = image.iter().map(|(address, _)| *address).max() else {
+        return Ok(Vec::new());
+    };
 
     let mut bytes = vec![0; (highest_address - first_address) as usize + 1];
     for (address, byte) in image {
@@ -95,8 +81,8 @@ pub fn assemble_binary(code: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-pub fn assemble_absolute(code: &str) -> Result<Vec<(u16, u8)>, String> {
-    Ok(assemble_source(code)?.image)
+pub fn assemble_with_metadata(code: &str) -> Result<AssemblyResult, String> {
+    assemble_source(code)
 }
 
 fn assemble_source(code: &str) -> Result<AssemblyResult, String> {
@@ -279,12 +265,19 @@ fn assemble_source(code: &str) -> Result<AssemblyResult, String> {
         }
 
         instructions.push((line_idx, current_pc, tokens));
-        current_pc += bytes.len() as u16;
+        let available = u16::MAX as usize - current_pc as usize;
+        if bytes.len() > available {
+            return Err(format!("Line {}: address space exceeds 64K", line_idx + 1));
+        }
+        current_pc = current_pc
+            .checked_add(bytes.len() as u16)
+            .ok_or_else(|| format!("Line {}: address space exceeds 64K", line_idx + 1))?;
     }
 
     let mut output = Vec::new();
     let mut address_to_line = HashMap::new();
     let mut image = Vec::new();
+    let mut lines = HashMap::new();
     let label_addresses: HashMap<String, u16> =
         labels.iter().map(|(k, v)| (k.clone(), v.address)).collect();
 
@@ -292,12 +285,23 @@ fn assemble_source(code: &str) -> Result<AssemblyResult, String> {
         let bytes = parse_instruction(&tokens, pc, &label_addresses, false)
             .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
 
+        lines.insert(
+            line_idx + 1,
+            AssemblyLine {
+                address: pc,
+                bytes: bytes.clone(),
+            },
+        );
+
         output.extend(&bytes);
 
         let is_org = matches!(tokens.first(), Some(Token::Identifier(m)) if m == "ORG");
         if !is_org {
             for (offset, byte) in bytes.iter().enumerate() {
-                image.push((pc + offset as u16, *byte));
+                let address = pc
+                    .checked_add(offset as u16)
+                    .ok_or_else(|| format!("Line {}: address space exceeds 64K", line_idx + 1))?;
+                image.push((address, *byte));
             }
         }
 
@@ -309,6 +313,7 @@ fn assemble_source(code: &str) -> Result<AssemblyResult, String> {
         address_to_line,
         line_to_address: line_addresses,
         image,
+        lines,
     })
 }
 
@@ -353,13 +358,18 @@ fn tokenize(text: &str) -> Result<Vec<Token>, String> {
             '"' => {
                 chars.next(); // consume "
                 let mut s = String::new();
+                let mut terminated = false;
                 while let Some(&c) = chars.peek() {
                     if c == '"' {
                         chars.next();
+                        terminated = true;
                         break;
                     }
                     s.push(c);
                     chars.next();
+                }
+                if !terminated {
+                    return Err("Unterminated string literal".to_string());
                 }
                 tokens.push(Token::String(s));
             }
@@ -606,17 +616,21 @@ fn resolve_immediate(
 ) -> Result<u16, String> {
     match op {
         Operand::Immediate(n) => Ok(*n),
-        Operand::Label(s) => {
-            if let Some(val) = labels.get(s) {
-                Ok(*val)
-            } else if is_dry_run {
-                Ok(0)
-            } else {
-                Err(format!("Label not found: {}", s))
-            }
-        }
+        Operand::Label(s) => resolve_label(s, labels, is_dry_run),
         _ => Err("Not an immediate".to_string()),
     }
+}
+
+fn resolve_label(
+    label: &str,
+    labels: &HashMap<String, u16>,
+    is_dry_run: bool,
+) -> Result<u16, String> {
+    labels
+        .get(label)
+        .copied()
+        .or_else(|| is_dry_run.then_some(0))
+        .ok_or_else(|| format!("Label not found: {}", label))
 }
 
 fn resolve_indirect(
@@ -626,15 +640,7 @@ fn resolve_indirect(
 ) -> Result<u16, String> {
     match op {
         Operand::IndirectImmediate(n) => Ok(*n),
-        Operand::IndirectLabel(s) => {
-            if let Some(val) = labels.get(s) {
-                Ok(*val)
-            } else if is_dry_run {
-                Ok(0)
-            } else {
-                Err(format!("Label not found: {}", s))
-            }
-        }
+        Operand::IndirectLabel(s) => resolve_label(s, labels, is_dry_run),
         _ => Err("Not an indirect address".to_string()),
     }
 }
@@ -723,11 +729,7 @@ fn parse_instruction(
                         bytes.extend_from_slice(s.as_bytes());
                     }
                     Operand::Label(l) => {
-                        let val = if is_dry_run {
-                            0
-                        } else {
-                            *labels.get(&l).unwrap_or(&0)
-                        };
+                        let val = resolve_label(&l, labels, is_dry_run)?;
                         if !is_dry_run && val > 255 {
                             return Err(format!(
                                 "Label '{}' value {} is too large for DB (byte)",
@@ -750,11 +752,7 @@ fn parse_instruction(
                         bytes.push((n >> 8) as u8);
                     }
                     Operand::Label(l) => {
-                        let val = if is_dry_run {
-                            0
-                        } else {
-                            *labels.get(&l).unwrap_or(&0)
-                        };
+                        let val = resolve_label(&l, labels, is_dry_run)?;
                         bytes.push((val & 0xFF) as u8);
                         bytes.push((val >> 8) as u8);
                     }

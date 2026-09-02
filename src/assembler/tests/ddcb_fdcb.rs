@@ -1,9 +1,9 @@
-use crate::assembler::assemble;
+use crate::assembler::assemble_with_metadata;
 use rstest::rstest;
 
 fn asm(code: &str) -> Vec<u8> {
-    assemble(code)
-        .map(|(bytes, _, _, _)| bytes)
+    assemble_with_metadata(code)
+        .map(|result| result.bytes)
         .unwrap_or_else(|e| panic!("Failed to assemble '{}': {}", code, e))
 }
 

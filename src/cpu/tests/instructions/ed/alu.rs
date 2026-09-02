@@ -3,7 +3,7 @@ use crate::{
         AddressingMode, GPR, RegisterPair, flags,
         tests::{instructions::ed::PREFIX, setup_cpu},
     },
-    traits::SyncronousComponent,
+    traits::SynchronousComponent,
 };
 use rstest::rstest;
 

@@ -1,7 +1,7 @@
 use crate::components::devices::Keypad;
 use crate::components::memories::mem_64k::Mem64k;
 use crate::cpu::Z80A;
-use crate::traits::{MemoryMapper, SyncronousComponent};
+use crate::traits::{MemoryMapper, SynchronousComponent};
 use std::cell::RefCell;
 use std::rc::Rc;
 

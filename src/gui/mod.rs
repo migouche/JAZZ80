@@ -1,4 +1,4 @@
-use crate::assembler::{Symbol, SymbolType, assemble, assemble_absolute, assemble_binary};
+use crate::assembler::{AssemblyLine, Symbol, SymbolType, assemble_binary, assemble_with_metadata};
 use eframe::egui::{self, TextBuffer};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use crate::components::memories::mem_64k::Mem64k;
 use crate::cpu::{Flag, GPR, Z80A};
-use crate::traits::{MemoryMapper, SyncronousComponent};
+use crate::traits::{MemoryMapper, SynchronousComponent};
 
 use crate::components::devices::DeviceDefinition;
 use crate::ui_traits::DeviceWithUi;
@@ -103,6 +103,8 @@ pub struct Z80App {
     address_to_line: HashMap<u16, usize>,
     #[serde(skip)]
     line_to_address: HashMap<usize, u16>,
+    #[serde(skip)]
+    assembly_lines: HashMap<usize, AssemblyLine>,
 
     #[serde(default)]
     symbol_display_prefs: HashMap<String, SymbolDisplayFormat>,
@@ -274,6 +276,7 @@ START:
             self.symbol_table.clear();
             self.address_to_line.clear();
             self.line_to_address.clear();
+            self.assembly_lines.clear();
             self.is_assembly_stale = false;
             self.last_error = None;
 
@@ -289,23 +292,24 @@ START:
         }
 
         let code = &active_tab.code;
-        let (bytes, symbols, addr_map, line_map, image, error) =
-            match (assemble(code), assemble_absolute(code)) {
-                (Ok((b, s, m, l)), Ok(image)) => (b, s, m, l, image, None),
-                (Err(e), _) => (
-                    Vec::new(),
-                    HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
-                    Vec::new(),
-                    Some(e),
+        let (bytes, symbols, addr_map, line_map, image, assembly_lines, error) =
+            match assemble_with_metadata(code) {
+                Ok(result) => (
+                    result.bytes,
+                    result.symbols,
+                    result.address_to_line,
+                    result.line_to_address,
+                    result.image,
+                    result.lines,
+                    None,
                 ),
-                (_, Err(e)) => (
+                Err(e) => (
                     Vec::new(),
                     HashMap::new(),
                     HashMap::new(),
                     HashMap::new(),
                     Vec::new(),
+                    HashMap::new(),
                     Some(e),
                 ),
             };
@@ -313,6 +317,7 @@ START:
         self.symbol_table = symbols;
         self.address_to_line = addr_map;
         self.line_to_address = line_map;
+        self.assembly_lines = assembly_lines;
         self.is_assembly_stale = false;
 
         if let Some(err) = error {
@@ -860,6 +865,7 @@ impl Default for Z80App {
             symbol_table: HashMap::new(),
             address_to_line: HashMap::new(),
             line_to_address: HashMap::new(),
+            assembly_lines: HashMap::new(),
             symbol_display_prefs: HashMap::new(),
             is_running: false,
             pending_modal: None,
@@ -1584,7 +1590,7 @@ impl eframe::App for Z80App {
                                                 _ => 1,
                                             };
                                             let mut bytes = Vec::new();
-                                            let display_len = len.min(8).max(1); // At least 1 byte
+                                            let display_len = len.clamp(1, 8); // At least 1 byte
                                             for i in 0..display_len {
                                                 bytes.push(self.memory.borrow().read(addr.wrapping_add(i as u16)));
                                             }
@@ -1875,27 +1881,13 @@ impl eframe::App for Z80App {
                                 };
 
                                 for i in 1..=num_lines {
-                                    let line_text = lines.get(i - 1).unwrap_or(&"");
-
-                                    // Extract the actual instruction ignoring comments and labels
-                                    let mut clean = line_text.split(';').next().unwrap_or("").trim();
-                                    if let Some(idx) = clean.find(':') {
-                                        clean = clean[idx + 1..].trim();
-                                    }
-                                    let upper = clean.to_uppercase();
-
-                                    // Determine if this line actually emits code
-                                    let emits_code = !clean.is_empty()
-                                        && !upper.starts_with("ORG ") 
-                                        && !upper.starts_with("EQU ") 
-                                        && !upper.contains(" EQU ");
-
                                     let mut addr_str = "    ".to_string();
 
-                                    if emits_code
-                                        && let Some(&addr) = self.line_to_address.get(&i) {
-                                            addr_str = format!("{:04X}", addr);
-                                        }
+                                    if let Some(line) = self.assembly_lines.get(&i)
+                                        && !line.bytes.is_empty()
+                                    {
+                                        addr_str = format!("{:04X}", line.address);
+                                    }
 
                                     let label = egui::Label::new(
                                         egui::RichText::new(addr_str)
@@ -1941,55 +1933,8 @@ impl eframe::App for Z80App {
                                     let mut data_str = "".to_string();
 
                                     if emits_code
-                                        && let Some(&addr) = self.line_to_address.get(&i) {
-
-                                            // 1. Z80 length decoder to fetch the EXACT required bytes 
-                                            let len = if upper.starts_with("DB ") || upper.starts_with("DEFB ") {
-                                                (clean.split(',').count() as u16).min(8) // Cap visualizer to 8 bytes
-                                            } else if upper.starts_with("DW ") || upper.starts_with("DEFW ") {
-                                                (clean.split(',').count() as u16 * 2).min(8)
-                                            } else if upper.starts_with("DS ") || upper.starts_with("DEFS ") {
-                                                0
-                                            } else {
-                                                let mem = self.memory.borrow();
-                                                let b0 = mem.read(addr);
-                                                match b0 {
-                                                    0xCB => 2,
-                                                    0xDD | 0xFD => {
-                                                        let b1 = mem.read(addr.wrapping_add(1));
-                                                        match b1 {
-                                                            0xCB => 4,
-                                                            0x21 | 0x22 | 0x2A | 0x36 => 4,
-                                                            0x34 | 0x35 => 3,
-                                                            0x46 | 0x4E | 0x56 | 0x5E | 0x66 | 0x6E | 0x7E => 3,
-                                                            0x70..=0x75 | 0x77 => 3,
-                                                            0x86 | 0x8E | 0x96 | 0x9E | 0xA6 | 0xAE | 0xB6 | 0xBE => 3,
-                                                            _ => 2,
-                                                        }
-                                                    }
-                                                    0xED => {
-                                                        let b1 = mem.read(addr.wrapping_add(1));
-                                                        match b1 {
-                                                            0x43 | 0x4B | 0x53 | 0x5B | 0x73 | 0x7B => 4,
-                                                            _ => 2,
-                                                        }
-                                                    }
-                                                    0xC2 | 0xC3 | 0xCA | 0xD2 | 0xDA | 0xE2 | 0xEA | 0xF2 | 0xFA | 0xCD | 0xCC | 0xC4 | 0xD4 | 0xDC | 0xE4 | 0xEC | 0xF4 | 0xFC => 3,
-                                                    0x01 | 0x11 | 0x21 | 0x31 | 0x22 | 0x2A | 0x32 | 0x3A => 3,
-                                                    0xC6 | 0xCE | 0xD6 | 0xDE | 0xE6 | 0xEE | 0xF6 | 0xFE => 2,
-                                                    0x06 | 0x0E | 0x16 | 0x1E | 0x26 | 0x2E | 0x3E => 2,
-                                                    0x10 | 0x18 | 0x20 | 0x28 | 0x30 | 0x38 => 2,
-                                                    0xDB | 0xD3 => 2,
-                                                    _ => 1,
-                                                }
-                                            };
-
-                                            // 2. Fetch the bytes
-                                            let mut bytes = Vec::new();
-                                            let mem = self.memory.borrow();
-                                            for offset in 0..len {
-                                                bytes.push(mem.read(addr.wrapping_add(offset)));
-                                            }
+                                        && let Some(line) = self.assembly_lines.get(&i) {
+                                            let bytes = line.bytes.iter().take(8).copied().collect::<Vec<_>>();
 
                                             // 3. String formatting based on text structure 
                                             if !bytes.is_empty() {

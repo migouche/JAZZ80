@@ -110,7 +110,7 @@ jobs:
           name: ${{ steps.vars.outputs.subject }}
           body: ${{ steps.vars.outputs.body }}
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.vars.outputs.is_prerelease == 'true' }}
           files: |
             artifacts/**/*.exe
             artifacts/**/JAZZ80-linux-amd64

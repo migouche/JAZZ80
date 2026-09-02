@@ -1,5 +1,5 @@
 use crate::cpu::tests::setup_cpu;
-use crate::cpu::{Flag, GPR, IndexRegister, SyncronousComponent, Z80A};
+use crate::cpu::{Flag, GPR, IndexRegister, SynchronousComponent, Z80A};
 use rstest::rstest;
 // use crate::traits::MemoryMapper;
 

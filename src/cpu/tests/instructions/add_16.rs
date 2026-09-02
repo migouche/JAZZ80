@@ -1,5 +1,5 @@
 use crate::cpu::tests::setup_cpu;
-use crate::cpu::{AddressingMode, GPR, IndexRegister, RegisterPair, SyncronousComponent};
+use crate::cpu::{AddressingMode, GPR, IndexRegister, RegisterPair, SynchronousComponent};
 use rstest::rstest;
 
 const ADD_HL_BC_OPCODE: u8 = 0x09;

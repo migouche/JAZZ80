@@ -1,5 +1,5 @@
 use crate::assembler::{
-    Operand, Token, assemble, assemble_absolute, assemble_binary, parse_operands, tokenize,
+    Operand, Token, assemble_binary, assemble_with_metadata, parse_operands, tokenize,
 };
 
 mod ddcb_fdcb;
@@ -180,20 +180,22 @@ fn test_parse_operands_labels_conditions() {
 
 #[test]
 fn test_local_labels_use_latest_global_scope() {
-    let (bytes, symbols, _, _) =
-        assemble("FOO: JP .DONE\n.BODY: NOP\n.DONE: JP .BODY\nBAR: JP .DONE\n.DONE: NOP").unwrap();
+    let result = assemble_with_metadata(
+        "FOO: JP .DONE\n.BODY: NOP\n.DONE: JP .BODY\nBAR: JP .DONE\n.DONE: NOP",
+    )
+    .unwrap();
 
     assert_eq!(
-        bytes,
+        result.bytes,
         vec![
             0xC3, 0x04, 0x00, 0x00, 0xC3, 0x03, 0x00, 0xC3, 0x0A, 0x00, 0x00
         ]
     );
-    assert_eq!(symbols["FOO"].address, 0);
-    assert_eq!(symbols["FOO.DONE"].address, 4);
-    assert_eq!(symbols["FOO.BODY"].address, 3);
-    assert_eq!(symbols["BAR"].address, 7);
-    assert_eq!(symbols["BAR.DONE"].address, 10);
+    assert_eq!(result.symbols["FOO"].address, 0);
+    assert_eq!(result.symbols["FOO.DONE"].address, 4);
+    assert_eq!(result.symbols["FOO.BODY"].address, 3);
+    assert_eq!(result.symbols["BAR"].address, 7);
+    assert_eq!(result.symbols["BAR.DONE"].address, 10);
 }
 
 #[test]
@@ -208,6 +210,11 @@ fn test_parse_operands_errors() {
 }
 
 #[test]
+fn test_unterminated_string_is_an_error() {
+    assert!(tokenize("DB \"missing").is_err());
+}
+
+#[test]
 fn test_assemble_binary_preserves_org_padding() {
     let bytes = assemble_binary("ORG 0000h\nDB 1\nORG 0003h\nDB 2").unwrap();
     assert_eq!(bytes, vec![1, 0, 0, 2]);
@@ -219,35 +226,23 @@ fn test_assemble_binary_includes_initial_org_padding() {
     assert_eq!(bytes, vec![0x3E, 0x2A, 0xC9]);
 }
 
-#[test]
-fn test_assemble_absolute_preserves_org_addresses() {
-    let image = assemble_absolute("ORG 8000h\nLD A, 42\nRET").unwrap();
-    let program = image
-        .iter()
-        .filter(|(addr, _)| *addr >= 0x8000)
-        .take(3)
-        .copied()
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        program,
-        vec![(0x8000, 0x3E), (0x8001, 0x2A), (0x8002, 0xC9)]
-    );
-}
-
 // =================================================================================
 //                           INSTRUCTION ENCODING TESTS
 // =================================================================================
 
 // Helper to assemble single line
 fn asm(code: &str) -> Vec<u8> {
-    assemble(code)
-        .map(|(bytes, _, _, _)| bytes)
+    assemble_with_metadata(code)
+        .map(|result| result.bytes)
         .unwrap_or_else(|e| panic!("Failed to assemble '{}': {}", code, e))
 }
 
 fn asm_err(code: &str) {
-    assert!(assemble(code).is_err(), "Expected error for '{}'", code);
+    assert!(
+        assemble_with_metadata(code).is_err(),
+        "Expected error for '{}'",
+        code
+    );
 }
 
 #[test]

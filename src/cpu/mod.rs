@@ -1,9 +1,12 @@
+#![allow(clippy::upper_case_acronyms)]
+#![cfg_attr(test, allow(clippy::too_many_arguments, clippy::type_complexity))]
+
 pub mod alu;
 
 #[cfg(test)]
 use std::collections::VecDeque;
 
-use std::{cell::RefCell, rc::Rc, usize};
+use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     cpu::alu::{
@@ -11,7 +14,7 @@ use crate::{
         rot::{self, RotOperation},
         set, sub_16,
     },
-    traits::{IODevice, MemoryMapper, SyncronousComponent},
+    traits::{IODevice, MemoryMapper, SynchronousComponent},
 };
 
 #[cfg(test)]
@@ -1628,9 +1631,9 @@ impl Z80A {
                 }
                 6 => {
                     test_log!(self, "LD r[y], n");
-                    let n = self.fetch();
                     let reg = self.table_r(y);
                     let dest = self.transform_register(reg.into(), addressing);
+                    let n = self.fetch();
                     self.ld(dest, AddressingMode::Immediate(n))
                 } //  LD r[y], n (still have to transform r[y] if IX/IY prefixed)
                 7 => {
@@ -2471,7 +2474,7 @@ impl Z80A {
     }
 }
 
-impl SyncronousComponent for Z80A {
+impl SynchronousComponent for Z80A {
     fn tick(&mut self) {
         // Poll for NMI (Edge detection)
         let mut nmi_active = false;

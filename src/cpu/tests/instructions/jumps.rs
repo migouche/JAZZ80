@@ -2,7 +2,7 @@ use rstest::rstest;
 
 use crate::cpu::tests::setup_cpu;
 use crate::cpu::{GPR, RegisterPair, flags};
-use crate::traits::SyncronousComponent;
+use crate::traits::SynchronousComponent;
 
 const DJNZ_OPCODE: u8 = 0x10;
 
