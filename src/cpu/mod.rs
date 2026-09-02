@@ -1204,8 +1204,18 @@ impl Z80A {
     ) -> AddressingMode {
         let (index, high, low, _name) = match addressing {
             PrefixAddressing::HL => return reg,
-            PrefixAddressing::IX => (IndexRegister::IX, IndexRegisterPart::IXH, IndexRegisterPart::IXL, "IX"),
-            PrefixAddressing::IY => (IndexRegister::IY, IndexRegisterPart::IYH, IndexRegisterPart::IYL, "IY"),
+            PrefixAddressing::IX => (
+                IndexRegister::IX,
+                IndexRegisterPart::IXH,
+                IndexRegisterPart::IXL,
+                "IX",
+            ),
+            PrefixAddressing::IY => (
+                IndexRegister::IY,
+                IndexRegisterPart::IYH,
+                IndexRegisterPart::IYL,
+                "IY",
+            ),
         };
         match reg {
             AddressingMode::Register(GPR::H) => {
@@ -1965,12 +1975,17 @@ impl Z80A {
             (true, true, true) => 0x9A,
         };
 
-        if adjust_high { self.set_flag(true, Flag::C); }
-        self.set_flag(match (n, h) {
-            (true, false) => false,
-            (true, true) => a & 0x0f < 6,
-            (false, _) => a & 0x0f >= 0x0a,
-        }, Flag::H);
+        if adjust_high {
+            self.set_flag(true, Flag::C);
+        }
+        self.set_flag(
+            match (n, h) {
+                (true, false) => false,
+                (true, true) => a & 0x0f < 6,
+                (false, _) => a & 0x0f >= 0x0a,
+            },
+            Flag::H,
+        );
         a = a.wrapping_add(adjustment);
 
         self.set_register(GPR::A, a);
@@ -1986,7 +2001,9 @@ impl Z80A {
 impl SynchronousComponent for Z80A {
     fn tick(&mut self) {
         self.poll_nmi();
-        if self.handle_pending_interrupts() || self.halted { return; }
+        if self.handle_pending_interrupts() || self.halted {
+            return;
+        }
 
         let opcode = self.fetch();
         self.decode(opcode);

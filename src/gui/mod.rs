@@ -12,8 +12,8 @@ use crate::traits::{MemoryMapper, SynchronousComponent};
 use crate::components::devices::DeviceDefinition;
 use crate::ui_traits::DeviceWithUi;
 
-mod highlighting;
 mod formatting;
+mod highlighting;
 
 #[cfg(target_arch = "wasm32")]
 use std::sync::mpsc::{Receiver, Sender, channel};

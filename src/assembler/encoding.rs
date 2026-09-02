@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use crate::cpu::alu::rot::RotOperation;
 use crate::cpu::ALUOperation;
+use crate::cpu::alu::rot::RotOperation;
 
 use super::{
     Operand, get_condition_code, get_r_code, get_rp_code, resolve_immediate, resolve_indirect,
@@ -247,7 +247,11 @@ pub(super) fn encode_bit_op(base: u8, ops: &[Operand]) -> Result<Vec<u8>, String
     }
 }
 
-pub(super) fn encode_jp(ops: &[Operand], labels: &HashMap<String, u16>, dry: bool) -> Result<Vec<u8>, String> {
+pub(super) fn encode_jp(
+    ops: &[Operand],
+    labels: &HashMap<String, u16>,
+    dry: bool,
+) -> Result<Vec<u8>, String> {
     match ops.len() {
         1 => match &ops[0] {
             op if matches!(

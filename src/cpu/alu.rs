@@ -174,8 +174,8 @@ pub fn set(value: u8, bit_position: u8) -> u8 {
 }
 
 pub mod alu_op {
-    use crate::cpu::flags;
     use super::pack_flags;
+    use crate::cpu::flags;
 
     pub fn add(a: u8, b: u8, carry_in: bool) -> (u8, u8) {
         let (intermediate_sum, carry1) = a.overflowing_add(b);
