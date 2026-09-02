@@ -2,6 +2,7 @@
 #![cfg_attr(test, allow(clippy::too_many_arguments, clippy::type_complexity))]
 
 pub mod alu;
+mod block_instructions;
 
 #[cfg(test)]
 use std::collections::VecDeque;
@@ -30,6 +31,10 @@ macro_rules! test_log {
         ()
     };
 }
+
+mod decoding;
+
+const _: fn(&mut Z80A, u8, PrefixAddressing) = Z80A::decode_unprefixed_legacy;
 
 mod flags {
     pub const CARRY: u8 = 0b00000001;
@@ -468,7 +473,7 @@ struct GeneralSet {
     l: u8,
 }
 
-fn decode_opcode(opcode: u8) -> (u8, u8, u8, u8, bool) // x, y, z, p, q
+pub(super) fn decode_opcode(opcode: u8) -> (u8, u8, u8, u8, bool) // x, y, z, p, q
     /* See http://www.z80.info/decoding.htm for more information
     x = the opcode's 1st octal digit (i.e. bits 7-6)
     y = the opcode's 2nd octal digit (i.e. bits 5-3)
@@ -493,24 +498,24 @@ pub struct Z80A {
     active_general: usize,
 
     // special registers
-    pc: u16,
-    sp: u16,
+    pub(super) pc: u16,
+    pub(super) sp: u16,
     ix: u16,
     iy: u16,
     i: u8,
     r: u8,
 
-    memory: Rc<RefCell<dyn MemoryMapper>>,
+    pub(super) memory: Rc<RefCell<dyn MemoryMapper>>,
     devices: Vec<Rc<RefCell<dyn IODevice>>>,
 
-    halted: bool,
-    iff1: bool,
-    iff2: bool,
+    pub(super) halted: bool,
+    pub(super) iff1: bool,
+    pub(super) iff2: bool,
     interrupt_mode: u8,
     nmi_pending: bool,
     int_pending: bool,
     nmi_last_state: bool, // Track NMI line state for edge detection
-    iff_delay_count: u8,
+    pub(super) iff_delay_count: u8,
 
     #[cfg(test)]
     test_callback: (
@@ -825,29 +830,17 @@ impl Z80A {
 
     pub fn set_flag(&mut self, value: bool, flag: Flag) {
         let f = &mut self.af_registers[self.active_af].f;
-        if value {
-            match flag {
-                Flag::C => *f |= flags::CARRY,
-                Flag::N => *f |= flags::ADD_SUB,
-                Flag::PV => *f |= flags::PARITY_OVERFLOW,
-                Flag::Y => *f |= flags::X,
-                Flag::H => *f |= flags::HALF_CARRY,
-                Flag::X => *f |= flags::Y,
-                Flag::Z => *f |= flags::ZERO,
-                Flag::S => *f |= flags::SIGN,
-            }
-        } else {
-            match flag {
-                Flag::C => *f &= !flags::CARRY,
-                Flag::N => *f &= !flags::ADD_SUB,
-                Flag::PV => *f &= !flags::PARITY_OVERFLOW,
-                Flag::Y => *f &= !flags::X,
-                Flag::H => *f &= !flags::HALF_CARRY,
-                Flag::X => *f &= !flags::Y,
-                Flag::Z => *f &= !flags::ZERO,
-                Flag::S => *f &= !flags::SIGN,
-            }
-        }
+        let mask = match flag {
+            Flag::C => flags::CARRY,
+            Flag::N => flags::ADD_SUB,
+            Flag::PV => flags::PARITY_OVERFLOW,
+            Flag::Y => flags::X,
+            Flag::H => flags::HALF_CARRY,
+            Flag::X => flags::Y,
+            Flag::Z => flags::ZERO,
+            Flag::S => flags::SIGN,
+        };
+        if value { *f |= mask } else { *f &= !mask }
     }
 
     fn set_system_register(&mut self, reg: SystemRegister, value: u16) {
@@ -1201,204 +1194,7 @@ impl Z80A {
     }
 
     fn execute_block_instruction(&mut self, instruction: BlockInstruction) {
-        match instruction {
-            BlockInstruction::LDI => {
-                let hl = self.get_register_pair(RegisterPair::HL);
-                let de = self.get_register_pair(RegisterPair::DE);
-                let bc = self.get_register_pair(RegisterPair::BC);
-                let val = self.memory.borrow().read(hl);
-                self.memory.borrow_mut().write(de, val);
-
-                self.set_register_pair(RegisterPair::HL, hl.wrapping_add(1));
-                self.set_register_pair(RegisterPair::DE, de.wrapping_add(1));
-                let next_bc = bc.wrapping_sub(1);
-                self.set_register_pair(RegisterPair::BC, next_bc);
-
-                self.set_flag(false, Flag::H);
-                self.set_flag(false, Flag::N);
-                self.set_flag(next_bc != 0, Flag::PV);
-                // X (3) and Y (5) from (A + (HL))? Manual says:
-                // Bit 5 is bit 1 of (A + (HL)), Bit 3 is bit 3 of (A + (HL)) -- wait
-                // "The contents of DE, HL, and BC are incremented/decremented... P/V is set if BC-1 is not 0..."
-                // Z80 User Manual p. 195 (LDI):
-                // S, Z, C not affected.
-                // H, N reset.
-                // P/V set if BC not 0.
-            }
-            BlockInstruction::LDIR => {
-                self.execute_block_instruction(BlockInstruction::LDI);
-                if self.get_register_pair(RegisterPair::BC) != 0 {
-                    self.pc = self.pc.wrapping_sub(2);
-                }
-            }
-            BlockInstruction::LDD => {
-                let hl = self.get_register_pair(RegisterPair::HL);
-                let de = self.get_register_pair(RegisterPair::DE);
-                let bc = self.get_register_pair(RegisterPair::BC);
-                let val = self.memory.borrow().read(hl);
-                self.memory.borrow_mut().write(de, val);
-
-                self.set_register_pair(RegisterPair::HL, hl.wrapping_sub(1));
-                self.set_register_pair(RegisterPair::DE, de.wrapping_sub(1));
-                let next_bc = bc.wrapping_sub(1);
-                self.set_register_pair(RegisterPair::BC, next_bc);
-
-                self.set_flag(false, Flag::H);
-                self.set_flag(false, Flag::N);
-                self.set_flag(next_bc != 0, Flag::PV);
-            }
-            BlockInstruction::LDDR => {
-                self.execute_block_instruction(BlockInstruction::LDD);
-                if self.get_register_pair(RegisterPair::BC) != 0 {
-                    self.pc = self.pc.wrapping_sub(2);
-                }
-            }
-            BlockInstruction::CPI => {
-                let a = self.get_register(GPR::A);
-                let hl = self.get_register_pair(RegisterPair::HL);
-                let bc = self.get_register_pair(RegisterPair::BC);
-                let val = self.memory.borrow().read(hl);
-
-                let res = a.wrapping_sub(val);
-
-                let next_bc = bc.wrapping_sub(1);
-                self.set_register_pair(RegisterPair::HL, hl.wrapping_add(1));
-                self.set_register_pair(RegisterPair::BC, next_bc);
-
-                self.set_flag(res == 0, Flag::Z);
-                self.set_flag((res & 0x80) != 0, Flag::S);
-                // H is set if borrow from bit 4. (a & 0xF) < (val & 0xF)
-                let h_borrow = (a & 0x0F) < (val & 0x0F);
-                self.set_flag(h_borrow, Flag::H);
-                self.set_flag(next_bc != 0, Flag::PV);
-                self.set_flag(true, Flag::N);
-            }
-            BlockInstruction::CPIR => {
-                self.execute_block_instruction(BlockInstruction::CPI);
-                let bc = self.get_register_pair(RegisterPair::BC);
-                let z = self.get_flag(Flag::Z);
-                if bc != 0 && !z {
-                    self.pc = self.pc.wrapping_sub(2);
-                }
-            }
-            BlockInstruction::CPD => {
-                let a = self.get_register(GPR::A);
-                let hl = self.get_register_pair(RegisterPair::HL);
-                let bc = self.get_register_pair(RegisterPair::BC);
-                let val = self.memory.borrow().read(hl);
-
-                let res = a.wrapping_sub(val);
-
-                let next_bc = bc.wrapping_sub(1);
-                self.set_register_pair(RegisterPair::HL, hl.wrapping_sub(1));
-                self.set_register_pair(RegisterPair::BC, next_bc);
-
-                self.set_flag(res == 0, Flag::Z);
-                self.set_flag((res & 0x80) != 0, Flag::S);
-                let h_borrow = (a & 0x0F) < (val & 0x0F);
-                self.set_flag(h_borrow, Flag::H);
-                self.set_flag(next_bc != 0, Flag::PV);
-                self.set_flag(true, Flag::N);
-            }
-            BlockInstruction::CPDR => {
-                self.execute_block_instruction(BlockInstruction::CPD);
-                let bc = self.get_register_pair(RegisterPair::BC);
-                let z = self.get_flag(Flag::Z);
-                if bc != 0 && !z {
-                    self.pc = self.pc.wrapping_sub(2);
-                }
-            }
-            BlockInstruction::INI => {
-                let b = self.get_register(GPR::B);
-                let c = self.get_register(GPR::C);
-                let hl = self.get_register_pair(RegisterPair::HL);
-
-                let port = ((b as u16) << 8) | (c as u16);
-                let val = self.read_io(port);
-                self.memory.borrow_mut().write(hl, val);
-
-                self.set_register_pair(RegisterPair::HL, hl.wrapping_add(1));
-                let next_b = b.wrapping_sub(1);
-                self.set_register(GPR::B, next_b);
-
-                self.set_flag(next_b == 0, Flag::Z);
-                self.set_flag(true, Flag::N);
-            }
-            BlockInstruction::INIR => {
-                self.execute_block_instruction(BlockInstruction::INI);
-                if self.get_register(GPR::B) != 0 {
-                    self.pc = self.pc.wrapping_sub(2);
-                }
-            }
-            BlockInstruction::IND => {
-                let b = self.get_register(GPR::B);
-                let c = self.get_register(GPR::C);
-                let hl = self.get_register_pair(RegisterPair::HL);
-
-                let port = ((b as u16) << 8) | (c as u16);
-                let val = self.read_io(port);
-                self.memory.borrow_mut().write(hl, val);
-
-                self.set_register_pair(RegisterPair::HL, hl.wrapping_sub(1));
-                let next_b = b.wrapping_sub(1);
-                self.set_register(GPR::B, next_b);
-
-                self.set_flag(next_b == 0, Flag::Z);
-                self.set_flag(true, Flag::N);
-            }
-            BlockInstruction::INDR => {
-                self.execute_block_instruction(BlockInstruction::IND);
-                if self.get_register(GPR::B) != 0 {
-                    self.pc = self.pc.wrapping_sub(2);
-                }
-            }
-            BlockInstruction::OUTI => {
-                let b = self.get_register(GPR::B);
-                let c = self.get_register(GPR::C);
-                let hl = self.get_register_pair(RegisterPair::HL);
-
-                let val = self.memory.borrow().read(hl);
-
-                let next_b = b.wrapping_sub(1);
-                self.set_register(GPR::B, next_b);
-                let port = ((next_b as u16) << 8) | (c as u16);
-                self.write_io(port, val);
-
-                self.set_register_pair(RegisterPair::HL, hl.wrapping_add(1));
-
-                self.set_flag(next_b == 0, Flag::Z);
-                self.set_flag(true, Flag::N);
-            }
-            BlockInstruction::OTIR => {
-                self.execute_block_instruction(BlockInstruction::OUTI);
-                if self.get_register(GPR::B) != 0 {
-                    self.pc = self.pc.wrapping_sub(2);
-                }
-            }
-            BlockInstruction::OUTD => {
-                let b = self.get_register(GPR::B);
-                let c = self.get_register(GPR::C);
-                let hl = self.get_register_pair(RegisterPair::HL);
-
-                let val = self.memory.borrow().read(hl);
-
-                let next_b = b.wrapping_sub(1);
-                self.set_register(GPR::B, next_b);
-                let port = ((next_b as u16) << 8) | (c as u16);
-                self.write_io(port, val);
-
-                self.set_register_pair(RegisterPair::HL, hl.wrapping_sub(1));
-
-                self.set_flag(next_b == 0, Flag::Z);
-                self.set_flag(true, Flag::N);
-            }
-            BlockInstruction::OTDR => {
-                self.execute_block_instruction(BlockInstruction::OUTD);
-                if self.get_register(GPR::B) != 0 {
-                    self.pc = self.pc.wrapping_sub(2);
-                }
-            }
-        }
+        block_instructions::execute(self, instruction);
     }
 
     fn transform_register(
@@ -1406,46 +1202,29 @@ impl Z80A {
         reg: AddressingMode,
         addressing: PrefixAddressing,
     ) -> AddressingMode {
-        match addressing {
-            PrefixAddressing::HL => reg,
-            PrefixAddressing::IX => match reg {
-                AddressingMode::Register(GPR::H) => {
-                    test_log!(self, "IXH");
-                    AddressingMode::IndexRegisterPart(IndexRegisterPart::IXH)
-                }
-                AddressingMode::Register(GPR::L) => {
-                    test_log!(self, "IXL");
-                    AddressingMode::IndexRegisterPart(IndexRegisterPart::IXL)
-                }
-                AddressingMode::RegisterIndirect(RegisterPair::HL) => {
-                    test_log!(self, "(IX + d)");
-                    AddressingMode::Indexed(IndexRegister::IX, self.fetch_displacement())
-                }
-                AddressingMode::RegisterPair(RegisterPair::HL) => {
-                    test_log!(self, "IX");
-                    AddressingMode::IndexRegister(IndexRegister::IX)
-                }
-                _ => reg,
-            },
-            PrefixAddressing::IY => match reg {
-                AddressingMode::Register(GPR::H) => {
-                    test_log!(self, "IYH");
-                    AddressingMode::IndexRegisterPart(IndexRegisterPart::IYH)
-                }
-                AddressingMode::Register(GPR::L) => {
-                    test_log!(self, "IYL");
-                    AddressingMode::IndexRegisterPart(IndexRegisterPart::IYL)
-                }
-                AddressingMode::RegisterIndirect(RegisterPair::HL) => {
-                    test_log!(self, "(IY + d)");
-                    AddressingMode::Indexed(IndexRegister::IY, self.fetch_displacement())
-                }
-                AddressingMode::RegisterPair(RegisterPair::HL) => {
-                    test_log!(self, "IY");
-                    AddressingMode::IndexRegister(IndexRegister::IY)
-                }
-                _ => reg,
-            },
+        let (index, high, low, _name) = match addressing {
+            PrefixAddressing::HL => return reg,
+            PrefixAddressing::IX => (IndexRegister::IX, IndexRegisterPart::IXH, IndexRegisterPart::IXL, "IX"),
+            PrefixAddressing::IY => (IndexRegister::IY, IndexRegisterPart::IYH, IndexRegisterPart::IYL, "IY"),
+        };
+        match reg {
+            AddressingMode::Register(GPR::H) => {
+                test_log!(self, "{}H", _name);
+                AddressingMode::IndexRegisterPart(high)
+            }
+            AddressingMode::Register(GPR::L) => {
+                test_log!(self, "{}L", _name);
+                AddressingMode::IndexRegisterPart(low)
+            }
+            AddressingMode::RegisterIndirect(RegisterPair::HL) => {
+                test_log!(self, "({} + d)", _name);
+                AddressingMode::Indexed(index, self.fetch_displacement())
+            }
+            AddressingMode::RegisterPair(RegisterPair::HL) => {
+                test_log!(self, "{}", _name);
+                AddressingMode::IndexRegister(index)
+            }
+            _ => reg,
         }
     }
 
@@ -1463,6 +1242,10 @@ impl Z80A {
     }
 
     fn decode_unprefixed(&mut self, opcode: u8, addressing: PrefixAddressing) {
+        decoding::decode_unprefixed(self, opcode, addressing);
+    }
+
+    fn decode_unprefixed_legacy(&mut self, opcode: u8, addressing: PrefixAddressing) {
         //test_log!(self, "decode_unprefixed");
         match addressing {
             PrefixAddressing::HL => test_log!(self, "decode_unprefixed"),
@@ -1966,275 +1749,7 @@ impl Z80A {
     }
 
     fn decode_ed(&mut self, opcode: u8) {
-        test_log!(self, "decode_ed");
-        let (x, y, z, p, q) = decode_opcode(opcode);
-
-        /*
-        Lots of NONI's here. Some of these are instructions for the Z180, will not be implemented.
-        (at least for now)
-         */
-
-        match x {
-            0 | 3 => test_log!(self, "NONI"), // NOTE: NONI
-            1 => match z {
-                0 => {
-                    if y == 6 {
-                        test_log!(self, "IN (C)");
-                        let c = self.get_register(GPR::C);
-                        let b = self.get_register(GPR::B);
-                        let port = ((b as u16) << 8) | (c as u16);
-                        let val = self.read_io(port);
-
-                        self.set_flag((val & flags::SIGN) != 0, Flag::S);
-                        self.set_flag(val == 0, Flag::Z);
-                        self.set_flag(false, Flag::H);
-                        self.set_flag(false, Flag::N);
-                        self.set_flag(val.count_ones().is_multiple_of(2), Flag::PV);
-                    } else if y < 8 {
-                        test_log!(self, "IN r[y], (C)");
-                        let reg = self.table_r(y);
-                        let c = self.get_register(GPR::C);
-                        let b = self.get_register(GPR::B);
-                        let port = ((b as u16) << 8) | (c as u16);
-                        let val = self.read_io(port);
-                        self.write_8(reg.into(), val);
-
-                        self.set_flag((val & flags::SIGN) != 0, Flag::S);
-                        self.set_flag(val == 0, Flag::Z);
-                        self.set_flag(false, Flag::H);
-                        self.set_flag(false, Flag::N);
-                        self.set_flag(val.count_ones().is_multiple_of(2), Flag::PV);
-                    } else {
-                        unreachable!("Invalid y value") // should never happen
-                    }
-                }
-                1 => {
-                    if y == 6 {
-                        test_log!(self, "OUT (C), 0");
-                        let c = self.get_register(GPR::C);
-                        let b = self.get_register(GPR::B);
-                        let port = ((b as u16) << 8) | (c as u16);
-                        self.write_io(port, 0);
-                    } else if y < 8 {
-                        test_log!(self, "OUT (C), r[y]");
-                        let reg = self.table_r(y);
-                        let value = self.read_8(reg.into());
-                        let c = self.get_register(GPR::C);
-                        let b = self.get_register(GPR::B);
-                        let port = ((b as u16) << 8) | (c as u16);
-                        self.write_io(port, value);
-                    } else {
-                        unreachable!("Invalid y value") // should never happen
-                    }
-                }
-                2 => {
-                    if !q {
-                        // SBC HL, rp[p]
-                        test_log!(self, "SBC HL, rp[p]");
-                        let dest = AddressingMode::RegisterPair(RegisterPair::HL);
-                        let rp = self.table_rp(p);
-                        self.sub_16_op(dest, AddressingMode::RegisterPair(rp), true) // SBC HL, rp[p]
-                    } else {
-                        // ADC HL, rp[p]
-                        test_log!(self, "ADC HL, rp[p]");
-                        let dest = AddressingMode::RegisterPair(RegisterPair::HL);
-                        let rp = self.table_rp(p);
-                        self.add_16_op(dest, AddressingMode::RegisterPair(rp), true) // ADC HL, rp[p]
-                    }
-                }
-                3 => {
-                    if !q {
-                        test_log!(self, "LD (nn), rp[p]");
-                        let addr = self.fetch_word();
-                        let src = self.table_rp(p);
-                        self.ld_16(
-                            AddressingMode::Absolute(addr),
-                            AddressingMode::RegisterPair(src),
-                        ) // LD (nn), rp[p]
-                    } else {
-                        test_log!(self, "LD rp[p], (nn)");
-                        let addr = self.fetch_word();
-                        let dest = self.table_rp(p);
-                        self.ld_16(
-                            AddressingMode::RegisterPair(dest),
-                            AddressingMode::Absolute(addr),
-                        ) // LD rp[p], (nn)
-                    }
-                }
-                /*
-                NOTE: in the original table it says that z = 4 => NEG, but its only true for 0x44
-                (y = 0), otherwise its NONI
-                 */
-                4 => {
-                    if y == 0 {
-                        // NEG
-                        test_log!(self, "NEG");
-                        let a = self.get_register(GPR::A);
-                        let (result, flags) = alu::alu_op::sub(0, a, false);
-                        self.set_register(GPR::A, result);
-                        self.af_registers[self.active_af].f = flags | flags::ADD_SUB;
-                    } else {
-                        test_log!(self, "NONI"); // NOTE: NONI
-                    }
-                }
-                5 => {
-                    if y == 0 {
-                        test_log!(self, "RETN");
-                        self.iff1 = self.iff2;
-                        let ret_addr = self.pop();
-                        self.pc = ret_addr;
-                    } else if y == 1 {
-                        test_log!(self, "RETI");
-                        let ret_addr = self.pop();
-                        self.pc = ret_addr;
-                    } else if y < 8 {
-                        test_log!(self, "NONI"); // NOTE: NONI
-                    } else {
-                        unreachable!("Invalid y value") // should never happen
-                    }
-                }
-                /*
-                NOTE: in the manual there is only im 0, im 1 and im 2, the rest are NONI's,
-                but the og page says otherwise, i'll go against the og page for now
-                 */
-                6 => {
-                    match y {
-                        0 => {
-                            test_log!(self, "IM 0");
-                            self.interrupt_mode = 0;
-                        }
-                        2 => {
-                            test_log!(self, "IM 1");
-                            self.interrupt_mode = 1;
-                        }
-                        3 => {
-                            test_log!(self, "IM 2");
-                            self.interrupt_mode = 2;
-                        }
-                        _ => {
-                            test_log!(self, "NONI"); // NOTE: NONI
-                        }
-                    }
-                }
-                7 => match y {
-                    0 => {
-                        test_log!(self, "LD I, A");
-                        self.ld(
-                            AddressingMode::System(SystemRegister::I),
-                            AddressingMode::Register(GPR::A),
-                        )
-                    } //  LD I, A
-                    1 => {
-                        test_log!(self, "LD R, A");
-                        self.ld(
-                            AddressingMode::System(SystemRegister::R),
-                            AddressingMode::Register(GPR::A),
-                        )
-                    } //  LD R, A
-                    2 => {
-                        test_log!(self, "LD A, I");
-                        self.ld(
-                            AddressingMode::Register(GPR::A),
-                            AddressingMode::System(SystemRegister::I),
-                        );
-                        let a = self.get_register(GPR::A);
-                        self.set_flag((a & flags::SIGN) != 0, Flag::S);
-                        self.set_flag(a == 0, Flag::Z);
-                        self.set_flag(false, Flag::H);
-                        self.set_flag(false, Flag::N);
-                        self.set_flag(self.iff2, Flag::PV);
-                    } //  LD A, I
-                    3 => {
-                        test_log!(self, "LD A, R");
-                        self.ld(
-                            AddressingMode::Register(GPR::A),
-                            AddressingMode::System(SystemRegister::R),
-                        );
-                        let a = self.get_register(GPR::A);
-                        self.set_flag((a & flags::SIGN) != 0, Flag::S);
-                        self.set_flag(a == 0, Flag::Z);
-                        self.set_flag(false, Flag::H);
-                        self.set_flag(false, Flag::N);
-                        self.set_flag(self.iff2, Flag::PV);
-                    } //  LD A, R
-                    4 => {
-                        // RRD
-                        test_log!(self, "RRD");
-                        let a = self.get_register(GPR::A);
-                        let ah = a & 0xF0;
-                        let al = a & 0x0F;
-                        let hl_addr = self.get_register_pair(RegisterPair::HL);
-                        let value = self.memory.borrow().read(hl_addr);
-                        let mh = value & 0xF0;
-                        let ml = value & 0x0F;
-
-                        let new_a = ah | ml;
-                        let new_hl = (al << 4) | (mh >> 4);
-
-                        let s = (new_a & flags::SIGN) != 0;
-                        let z = new_a == 0;
-                        let p = new_a.count_ones().is_multiple_of(2);
-                        let x = (new_a & flags::X) != 0;
-                        let y = (new_a & flags::Y) != 0;
-
-                        self.set_register(GPR::A, new_a);
-                        self.memory.borrow_mut().write(hl_addr, new_hl);
-
-                        self.set_flag(s, Flag::S);
-                        self.set_flag(z, Flag::Z);
-                        self.set_flag(p, Flag::PV);
-                        self.set_flag(false, Flag::H);
-                        self.set_flag(false, Flag::N);
-                        self.set_flag(x, Flag::X);
-                        self.set_flag(y, Flag::Y);
-                    }
-                    5 => {
-                        test_log!(self, "RLD");
-                        let a = self.get_register(GPR::A);
-                        let ah = a & 0xF0;
-                        let al = a & 0x0F;
-                        let hl_addr = self.get_register_pair(RegisterPair::HL);
-                        let value = self.memory.borrow().read(hl_addr);
-                        let mh = value & 0xF0;
-                        let ml = value & 0x0F;
-
-                        let new_a = ah | (mh >> 4);
-                        let new_hl = (ml << 4) | al;
-
-                        let s = (new_a & flags::SIGN) != 0;
-                        let z = new_a == 0;
-                        let p = new_a.count_ones().is_multiple_of(2);
-                        let x = (new_a & flags::X) != 0;
-                        let y = (new_a & flags::Y) != 0;
-
-                        self.set_register(GPR::A, new_a);
-                        self.memory.borrow_mut().write(hl_addr, new_hl);
-
-                        self.set_flag(s, Flag::S);
-                        self.set_flag(z, Flag::Z);
-                        self.set_flag(p, Flag::PV);
-                        self.set_flag(false, Flag::H);
-                        self.set_flag(false, Flag::N);
-                        self.set_flag(x, Flag::X);
-                        self.set_flag(y, Flag::Y);
-                    }
-                    6 => test_log!(self, "NONI"),         // NOTE: NONI
-                    7 => test_log!(self, "NONI"),         // NOTE: NONI
-                    _ => unreachable!("Invalid y value"), // should never happen
-                },
-                _ => unreachable!("Invalid z value"), // should never happen
-            },
-            2 => {
-                if z <= 3 && y >= 4 {
-                    test_log!(self, "bli[y, z]");
-                    let inst = self.table_bli(y, z);
-                    self.execute_block_instruction(inst);
-                } else {
-                    test_log!(self, "NONI"); // NOTE: NONI
-                }
-            }
-            _ => unreachable!("Invalid x value"), // should never happen
-        }
+        decoding::decode_ed(self, opcode)
     }
 
     fn decode_dd(&mut self, opcode: u8) {
@@ -2434,35 +1949,29 @@ impl Z80A {
     }
 
     fn daa(&mut self) {
-        let mut t: u8 = 0;
+        let n = self.get_flag(Flag::N);
+        let h = self.get_flag(Flag::H);
+        let c = self.get_flag(Flag::C);
         let mut a = self.get_register(GPR::A);
+        let adjust_low = h || a & 0x0f > 9;
+        let adjust_high = c || a > 0x99;
+        let adjustment = match (adjust_low, adjust_high, n) {
+            (false, false, _) => 0,
+            (true, false, false) => 0x06,
+            (false, true, false) => 0x60,
+            (true, true, false) => 0x66,
+            (true, false, true) => 0xFA,
+            (false, true, true) => 0xA0,
+            (true, true, true) => 0x9A,
+        };
 
-        if self.get_flag(Flag::H) || ((a & 0xf) > 9) {
-            t = t.wrapping_add(1);
-        }
-
-        if self.get_flag(Flag::C) || (a > 0x99) {
-            t = t.wrapping_add(2);
-            self.set_flag(true, Flag::C);
-        }
-
-        if self.get_flag(Flag::N) && !self.get_flag(Flag::H) {
-            self.set_flag(false, Flag::H);
-        } else {
-            if self.get_flag(Flag::N) && self.get_flag(Flag::H) {
-                self.set_flag((a & 0x0f) < 6, Flag::H);
-            } else {
-                self.set_flag((a & 0x0f) >= 0x0a, Flag::H);
-            }
-        }
-
-        if t == 1 {
-            a = a.wrapping_add(if self.get_flag(Flag::N) { 0xFA } else { 0x06 })
-        } else if t == 2 {
-            a = a.wrapping_add(if self.get_flag(Flag::N) { 0xA0 } else { 0x60 })
-        } else if t == 3 {
-            a = a.wrapping_add(if self.get_flag(Flag::N) { 0x9A } else { 0x66 })
-        }
+        if adjust_high { self.set_flag(true, Flag::C); }
+        self.set_flag(match (n, h) {
+            (true, false) => false,
+            (true, true) => a & 0x0f < 6,
+            (false, _) => a & 0x0f >= 0x0a,
+        }, Flag::H);
+        a = a.wrapping_add(adjustment);
 
         self.set_register(GPR::A, a);
 
@@ -2476,7 +1985,25 @@ impl Z80A {
 
 impl SynchronousComponent for Z80A {
     fn tick(&mut self) {
-        // Poll for NMI (Edge detection)
+        self.poll_nmi();
+        if self.handle_pending_interrupts() || self.halted { return; }
+
+        let opcode = self.fetch();
+        self.decode(opcode);
+
+        // Handle Delayed Interrupt Enable (EI)
+        if self.iff_delay_count > 0 {
+            self.iff_delay_count -= 1;
+            if self.iff_delay_count == 0 {
+                self.iff1 = true;
+                self.iff2 = true;
+            }
+        }
+    }
+}
+
+impl Z80A {
+    fn poll_nmi(&mut self) {
         let mut nmi_active = false;
         for dev in &self.devices {
             if dev.borrow().poll_nmi() {
@@ -2489,13 +2016,14 @@ impl SynchronousComponent for Z80A {
             self.nmi_pending = true;
         }
         self.nmi_last_state = nmi_active;
+    }
 
-        // Handle NMI (Edge triggered, highest priority)
+    fn handle_pending_interrupts(&mut self) -> bool {
         if self.nmi_pending {
             self.nmi_pending = false;
             self.halted = false; // Wake from HALT
             self.handle_nmi();
-            return;
+            return true;
         }
 
         // Handle Maskable Interrupts (Level triggered)
@@ -2505,32 +2033,9 @@ impl SynchronousComponent for Z80A {
         if self.iff1 && self.is_int_line_active() && self.iff_delay_count == 0 {
             self.halted = false; // Wake from HALT
             self.handle_int();
-            return;
+            return true;
         }
-
-        if self.halted {
-            return;
-        }
-
-        /*
-        self.cycles -= 1;
-            if self.cycles == 0 {
-                let opcode = self.fetch();
-            // decode and execute
-            self.execute_instruction(opcode);
-        }
-        */
-        let opcode = self.fetch();
-        self.decode(opcode);
-
-        // Handle Delayed Interrupt Enable (EI)
-        if self.iff_delay_count > 0 {
-            self.iff_delay_count -= 1;
-            if self.iff_delay_count == 0 {
-                self.iff1 = true;
-                self.iff2 = true;
-            }
-        }
+        false
     }
 }
 

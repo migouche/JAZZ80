@@ -13,6 +13,7 @@ use crate::components::devices::DeviceDefinition;
 use crate::ui_traits::DeviceWithUi;
 
 mod highlighting;
+mod formatting;
 
 #[cfg(target_arch = "wasm32")]
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -433,42 +434,13 @@ START:
         }
     }
 
-    fn binary_hexdump(bytes: &[u8]) -> String {
-        let mut lines = Vec::new();
-        for (offset, chunk) in bytes.chunks(16).enumerate() {
-            let start = offset * 16;
-            let hex = chunk
-                .iter()
-                .map(|b| format!("{:02X}", b))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let ascii = chunk
-                .iter()
-                .map(|b| {
-                    let c = *b as char;
-                    if c.is_ascii_graphic() || c == ' ' {
-                        c
-                    } else {
-                        '.'
-                    }
-                })
-                .collect::<String>();
-            lines.push(format!("{:04X}: {:<47} {}", start as u16, hex, ascii));
-        }
-        if lines.is_empty() {
-            "".to_string()
-        } else {
-            lines.join("\n")
-        }
-    }
-
     fn open_binary_tab(
         &mut self,
         path: PathBuf,
         bytes: Vec<u8>,
         storage: Option<&mut (dyn eframe::Storage + 'static)>,
     ) {
-        let hexdump = Self::binary_hexdump(&bytes);
+        let hexdump = formatting::binary_hexdump(&bytes);
         if let Some(idx) = self
             .tabs
             .iter()
@@ -794,6 +766,223 @@ START:
         {
             self.last_error = Some("Binary import is not supported in the web build".to_string());
         }
+    }
+
+    fn process_header_action(
+        &mut self,
+        action: HeaderAction,
+        ctx: &egui::Context,
+        frame: &mut eframe::Frame,
+    ) {
+        match action {
+            HeaderAction::NewFile => self.new_file(frame.storage_mut()),
+            HeaderAction::OpenFileDialog => self.open_file_dialog(frame.storage_mut()),
+            HeaderAction::OpenFile(path) => self.open_file(path, frame.storage_mut()),
+            HeaderAction::SaveFile => self.save_file(self.active_tab, frame.storage_mut()),
+            HeaderAction::SaveFileAs => self.save_file_as(frame.storage_mut()),
+            HeaderAction::AssembleBinary => self.assemble_binary_to_file(frame.storage_mut()),
+            HeaderAction::LoadBinary => self.load_binary_dialog(frame.storage_mut()),
+            HeaderAction::CloseTab(idx) => {
+                if self.tabs[idx].is_dirty {
+                    self.pending_modal = Some(ModalType::CloseTab(idx));
+                } else {
+                    self.close_tab(idx, frame.storage_mut());
+                }
+            }
+            HeaderAction::Quit => {
+                // This triggers on_close_event
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    fn render_registers_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Registers");
+        ui.separator();
+
+        let can_edit = !self.is_running || self.cpu.is_halted();
+
+        egui::Grid::new("regs_grid")
+            .striped(true)
+            .spacing([10.0, 8.0])
+            .show(ui, |ui| {
+                macro_rules! edit_16 {
+                    ($name:expr, $getter:expr, $setter:expr) => {
+                        ui.label($name);
+                        let val = $getter;
+                        let id = egui::Id::new($name);
+                        let mut s = ui.data_mut(|d| {
+                            d.get_temp_mut_or_insert_with(id, || format!("{:04X}", val))
+                                .clone()
+                        });
+                        let resp = ui.add_enabled(
+                            can_edit,
+                            egui::TextEdit::singleline(&mut s)
+                                .desired_width(45.0)
+                                .font(egui::TextStyle::Monospace),
+                        );
+                        if resp.changed() {
+                            if let Ok(v) = u16::from_str_radix(s.trim(), 16) {
+                                $setter(v);
+                            }
+                            ui.data_mut(|d| d.insert_temp(id, s));
+                        } else if !resp.has_focus() {
+                            ui.data_mut(|d| d.insert_temp(id, format!("{:04X}", val)));
+                        }
+                    };
+                }
+
+                macro_rules! edit_8 {
+                    ($name:expr, $id:expr, $getter:expr, $setter:expr) => {
+                        ui.label($name);
+                        let val = $getter;
+                        let id = egui::Id::new($id);
+                        let mut s = ui.data_mut(|d| {
+                            d.get_temp_mut_or_insert_with(id, || format!("{:02X}", val))
+                                .clone()
+                        });
+                        let resp = ui.add_enabled(
+                            can_edit,
+                            egui::TextEdit::singleline(&mut s)
+                                .desired_width(25.0)
+                                .font(egui::TextStyle::Monospace),
+                        );
+                        if resp.changed() {
+                            if let Ok(v) = u8::from_str_radix(s.trim(), 16) {
+                                $setter(v);
+                            }
+                            ui.data_mut(|d| d.insert_temp(id, s));
+                        } else if !resp.has_focus() {
+                            ui.data_mut(|d| d.insert_temp(id, format!("{:02X}", val)));
+                        }
+                    };
+                }
+
+                edit_16!("PC", self.cpu.get_pc(), |v| self.cpu.set_pc(v));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+                edit_16!("SP", self.cpu.get_sp(), |v| self.cpu.set_sp(v));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+                edit_16!("IX", self.cpu.get_ix(), |v| self.cpu.set_ix(v));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+                edit_16!("IY", self.cpu.get_iy(), |v| self.cpu.set_iy(v));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+
+                ui.separator();
+                ui.separator();
+                ui.separator();
+                ui.separator();
+                ui.end_row();
+
+                let regs = [
+                    ("A", GPR::A),
+                    ("F", GPR::F),
+                    ("B", GPR::B),
+                    ("C", GPR::C),
+                    ("D", GPR::D),
+                    ("E", GPR::E),
+                    ("H", GPR::H),
+                    ("L", GPR::L),
+                ];
+
+                for (name, gpr) in regs {
+                    edit_8!(name, name, self.cpu.get_register(gpr), |v| self
+                        .cpu
+                        .set_register(gpr, v));
+                    let shadow_name = format!("{}'", name);
+                    edit_8!(
+                        shadow_name.clone(),
+                        shadow_name,
+                        self.cpu.get_shadow_register(gpr),
+                        |v| self.cpu.set_shadow_register(gpr, v)
+                    );
+                    ui.end_row();
+                }
+
+                ui.separator();
+                ui.separator();
+                ui.separator();
+                ui.separator();
+                ui.end_row();
+
+                let mono = |text: String| egui::RichText::new(text).monospace();
+                ui.label("IFF1");
+                ui.label(mono(format!("{}", self.cpu.get_iff1())));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+                ui.label("IFF2");
+                ui.label(mono(format!("{}", self.cpu.get_iff2())));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+                ui.label("IM");
+                ui.label(mono(format!("{}", self.cpu.get_interrupt_mode())));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+            });
+
+        ui.add_space(20.0);
+        ui.heading("Flags");
+        ui.separator();
+
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            for (flag, label) in [
+                (Flag::S, "S"),
+                (Flag::Z, "Z"),
+                (Flag::Y, "Y"),
+                (Flag::H, "H"),
+                (Flag::X, "X"),
+                (Flag::PV, "PV"),
+                (Flag::N, "N"),
+                (Flag::C, "C"),
+            ] {
+                let on = self.cpu.get_flag(flag);
+                let color = if on {
+                    egui::Color32::from_rgb(0, 255, 0)
+                } else {
+                    egui::Color32::from_rgb(60, 60, 60)
+                };
+                let text_color = if on {
+                    egui::Color32::BLACK
+                } else {
+                    egui::Color32::WHITE
+                };
+
+                let text = egui::RichText::new(label).strong().color(text_color);
+                let frame_resp = egui::Frame::new()
+                    .fill(color)
+                    .corner_radius(4.0)
+                    .inner_margin(4.0)
+                    .show(ui, |ui| {
+                        ui.label(text);
+                    });
+
+                let interact_resp = ui.interact(
+                    frame_resp.response.rect,
+                    ui.id().with(label),
+                    egui::Sense::click(),
+                );
+
+                if can_edit {
+                    if interact_resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if interact_resp.clicked() {
+                        self.cpu.set_flag(!on, flag);
+                    }
+                }
+            }
+        });
     }
 
     fn add_recent_file(&mut self, path: PathBuf) {
@@ -1197,195 +1386,7 @@ impl eframe::App for Z80App {
         egui::Panel::right("right_panel")
             .resizable(true)
             .default_size(280.0)
-            .show(ui, |ui| {
-                ui.heading("Registers");
-                ui.separator();
-
-                let can_edit = !self.is_running || self.cpu.is_halted();
-
-                egui::Grid::new("regs_grid")
-                    .striped(true)
-                    .spacing([10.0, 8.0])
-                    .show(ui, |ui| {
-                        macro_rules! edit_16 {
-                            ($name:expr, $getter:expr, $setter:expr) => {
-                                ui.label($name);
-                                let val = $getter;
-                                let id = egui::Id::new($name);
-                                let mut s = ui.data_mut(|d| {
-                                    d.get_temp_mut_or_insert_with(id, || format!("{:04X}", val))
-                                        .clone()
-                                });
-                                let resp = ui.add_enabled(
-                                    can_edit,
-                                    egui::TextEdit::singleline(&mut s)
-                                        .desired_width(45.0)
-                                        .font(egui::TextStyle::Monospace),
-                                );
-                                if resp.changed() {
-                                    if let Ok(v) = u16::from_str_radix(s.trim(), 16) {
-                                        $setter(v);
-                                    }
-                                    ui.data_mut(|d| d.insert_temp(id, s));
-                                } else if !resp.has_focus() {
-                                    ui.data_mut(|d| d.insert_temp(id, format!("{:04X}", val)));
-                                }
-                            };
-                        }
-
-                        macro_rules! edit_8 {
-                            ($name:expr, $id:expr, $getter:expr, $setter:expr) => {
-                                ui.label($name);
-                                let val = $getter;
-                                let id = egui::Id::new($id);
-                                let mut s = ui.data_mut(|d| {
-                                    d.get_temp_mut_or_insert_with(id, || format!("{:02X}", val))
-                                        .clone()
-                                });
-                                let resp = ui.add_enabled(
-                                    can_edit,
-                                    egui::TextEdit::singleline(&mut s)
-                                        .desired_width(25.0)
-                                        .font(egui::TextStyle::Monospace),
-                                );
-                                if resp.changed() {
-                                    if let Ok(v) = u8::from_str_radix(s.trim(), 16) {
-                                        $setter(v);
-                                    }
-                                    ui.data_mut(|d| d.insert_temp(id, s));
-                                } else if !resp.has_focus() {
-                                    ui.data_mut(|d| d.insert_temp(id, format!("{:02X}", val)));
-                                }
-                            };
-                        }
-
-                        edit_16!("PC", self.cpu.get_pc(), |v| self.cpu.set_pc(v));
-                        ui.label("");
-                        ui.label("");
-                        ui.end_row();
-                        edit_16!("SP", self.cpu.get_sp(), |v| self.cpu.set_sp(v));
-                        ui.label("");
-                        ui.label("");
-                        ui.end_row();
-                        edit_16!("IX", self.cpu.get_ix(), |v| self.cpu.set_ix(v));
-                        ui.label("");
-                        ui.label("");
-                        ui.end_row();
-                        edit_16!("IY", self.cpu.get_iy(), |v| self.cpu.set_iy(v));
-                        ui.label("");
-                        ui.label("");
-                        ui.end_row();
-
-                        ui.separator();
-                        ui.separator();
-                        ui.separator();
-                        ui.separator();
-                        ui.end_row();
-
-                        let regs = [
-                            ("A", GPR::A),
-                            ("F", GPR::F),
-                            ("B", GPR::B),
-                            ("C", GPR::C),
-                            ("D", GPR::D),
-                            ("E", GPR::E),
-                            ("H", GPR::H),
-                            ("L", GPR::L),
-                        ];
-
-                        for (name, gpr) in regs {
-                            edit_8!(name, name, self.cpu.get_register(gpr), |v| self
-                                .cpu
-                                .set_register(gpr, v));
-                            let shadow_name = format!("{}'", name);
-                            edit_8!(
-                                shadow_name.clone(),
-                                shadow_name,
-                                self.cpu.get_shadow_register(gpr),
-                                |v| self.cpu.set_shadow_register(gpr, v)
-                            );
-                            ui.end_row();
-                        }
-
-                        ui.separator();
-                        ui.separator();
-                        ui.separator();
-                        ui.separator();
-                        ui.end_row();
-
-                        let mono = |text: String| egui::RichText::new(text).monospace();
-                        ui.label("IFF1");
-                        ui.label(mono(format!("{}", self.cpu.get_iff1())));
-                        ui.label("");
-                        ui.label("");
-                        ui.end_row();
-                        ui.label("IFF2");
-                        ui.label(mono(format!("{}", self.cpu.get_iff2())));
-                        ui.label("");
-                        ui.label("");
-                        ui.end_row();
-                        ui.label("IM");
-                        ui.label(mono(format!("{}", self.cpu.get_interrupt_mode())));
-                        ui.label("");
-                        ui.label("");
-                        ui.end_row();
-                    });
-
-                ui.add_space(20.0);
-                ui.heading("Flags");
-                ui.separator();
-
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 10.0;
-                    for (flag, label) in [
-                        (Flag::S, "S"),
-                        (Flag::Z, "Z"),
-                        (Flag::Y, "Y"),
-                        (Flag::H, "H"),
-                        (Flag::X, "X"),
-                        (Flag::PV, "PV"),
-                        (Flag::N, "N"),
-                        (Flag::C, "C"),
-                    ] {
-                        let on = self.cpu.get_flag(flag);
-                        let color = if on {
-                            egui::Color32::from_rgb(0, 255, 0)
-                        } else {
-                            egui::Color32::from_rgb(60, 60, 60)
-                        };
-                        let text_color = if on {
-                            egui::Color32::BLACK
-                        } else {
-                            egui::Color32::WHITE
-                        };
-
-                        // Drawn as a small badge
-                        let text = egui::RichText::new(label).strong().color(text_color);
-                        let frame_resp = egui::Frame::new()
-                            .fill(color)
-                            .corner_radius(4.0)
-                            .inner_margin(4.0)
-                            .show(ui, |ui| {
-                                ui.label(text);
-                            });
-
-                        let interact_resp = ui.interact(
-                            frame_resp.response.rect,
-                            ui.id().with(label),
-                            egui::Sense::click(),
-                        );
-
-                        if can_edit {
-                            if interact_resp.hovered() {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                            }
-                            if interact_resp.clicked() {
-                                self.cpu.set_flag(!on, flag);
-                            }
-                        }
-                    }
-                });
-            });
+            .show(ui, |ui| self.render_registers_panel(ui));
 
         let mut sorted_symbols: Vec<_> = self.symbol_table.iter().collect();
         sorted_symbols.sort_by_key(|item| item.1.source_order);
@@ -2071,26 +2072,7 @@ impl eframe::App for Z80App {
         });
 
         if let Some(action) = action {
-            match action {
-                HeaderAction::NewFile => self.new_file(frame.storage_mut()),
-                HeaderAction::OpenFileDialog => self.open_file_dialog(frame.storage_mut()),
-                HeaderAction::OpenFile(path) => self.open_file(path, frame.storage_mut()),
-                HeaderAction::SaveFile => self.save_file(self.active_tab, frame.storage_mut()),
-                HeaderAction::SaveFileAs => self.save_file_as(frame.storage_mut()),
-                HeaderAction::AssembleBinary => self.assemble_binary_to_file(frame.storage_mut()),
-                HeaderAction::LoadBinary => self.load_binary_dialog(frame.storage_mut()),
-                HeaderAction::CloseTab(idx) => {
-                    if self.tabs[idx].is_dirty {
-                        self.pending_modal = Some(ModalType::CloseTab(idx));
-                    } else {
-                        self.close_tab(idx, frame.storage_mut());
-                    }
-                }
-                HeaderAction::Quit => {
-                    // This triggers on_close_event
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            }
+            self.process_header_action(action, &ctx, frame);
         }
 
         // Handle Modal Dialogs

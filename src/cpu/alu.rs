@@ -1,5 +1,17 @@
 use crate::cpu::flags;
 
+#[allow(clippy::too_many_arguments)]
+fn pack_flags(c: bool, n: bool, pv: bool, x: bool, h: bool, y: bool, z: bool, s: bool) -> u8 {
+    (if c { flags::CARRY } else { 0x00 })
+        | (if n { flags::ADD_SUB } else { 0x00 })
+        | (if pv { flags::PARITY_OVERFLOW } else { 0x00 })
+        | (if x { flags::X } else { 0x00 })
+        | (if h { flags::HALF_CARRY } else { 0x00 })
+        | (if y { flags::Y } else { 0x00 })
+        | (if z { flags::ZERO } else { 0x00 })
+        | (if s { flags::SIGN } else { 0x00 })
+}
+
 pub mod rot {
     use crate::cpu::flags;
 
@@ -140,25 +152,17 @@ pub mod rot {
 }
 
 pub fn bit(value: u8, bit_position: u8) -> u8 {
-    let bit: bool = (value & (1 << bit_position)) != 0;
-
-    let z = !bit;
-    let s = bit_position == 7 && bit;
-    let pv = z;
-    let h = true;
-    let n = false;
-    let c = false; // unaffected, will use mask later to ignore
-    let f3 = bit_position == 3 && bit;
-    let f5 = bit_position == 5 && bit;
-
-    (if c { flags::CARRY } else { 0x00 })
-        | (if n { flags::ADD_SUB } else { 0x00 })
-        | (if pv { flags::PARITY_OVERFLOW } else { 0x00 })
-        | (if f3 { flags::X } else { 0x00 })
-        | (if h { flags::HALF_CARRY } else { 0x00 })
-        | (if f5 { flags::Y } else { 0x00 })
-        | (if z { flags::ZERO } else { 0x00 })
-        | (if s { flags::SIGN } else { 0x00 })
+    let is_set = value & (1 << bit_position) != 0;
+    pack_flags(
+        false,
+        false,
+        !is_set,
+        bit_position == 3 && is_set,
+        true,
+        bit_position == 5 && is_set,
+        !is_set,
+        bit_position == 7 && is_set,
+    )
 }
 
 pub fn res(value: u8, bit_position: u8) -> u8 {
@@ -171,6 +175,7 @@ pub fn set(value: u8, bit_position: u8) -> u8 {
 
 pub mod alu_op {
     use crate::cpu::flags;
+    use super::pack_flags;
 
     pub fn add(a: u8, b: u8, carry_in: bool) -> (u8, u8) {
         let (intermediate_sum, carry1) = a.overflowing_add(b);
@@ -206,16 +211,7 @@ pub mod alu_op {
         let pv = ((a ^ b) & (a ^ final_diff) & 0x80) != 0;
         let x = (final_diff & 0x08) != 0;
         let y = (final_diff & 0x20) != 0;
-        let n = true;
-
-        let flags = (if carry_out { flags::CARRY } else { 0x00 })
-            | (if n { flags::ADD_SUB } else { 0x00 })
-            | (if pv { flags::PARITY_OVERFLOW } else { 0x00 })
-            | (if x { flags::X } else { 0x00 })
-            | (if h { flags::HALF_CARRY } else { 0x00 })
-            | (if y { flags::Y } else { 0x00 })
-            | (if z { flags::ZERO } else { 0x00 })
-            | (if s { flags::SIGN } else { 0x00 });
+        let flags = pack_flags(carry_out, true, pv, x, h, y, z, s);
 
         (final_diff, flags)
     }
@@ -342,14 +338,7 @@ pub fn add_16(a: u16, b: u16, current_flags: u8, use_carry: bool) -> (u16, u8) {
         )
     };
 
-    let flags = (if c { flags::CARRY } else { 0x00 })
-        | (if n { flags::ADD_SUB } else { 0x00 })
-        | (if pv { flags::PARITY_OVERFLOW } else { 0x00 })
-        | (if x { flags::X } else { 0x00 })
-        | (if h { flags::HALF_CARRY } else { 0x00 })
-        | (if y { flags::Y } else { 0x00 })
-        | (if z { flags::ZERO } else { 0x00 })
-        | (if s { flags::SIGN } else { 0x00 });
+    let flags = pack_flags(c, n, pv, x, h, y, z, s);
 
     (result, flags)
 }
@@ -386,14 +375,7 @@ pub fn sub_16(a: u16, b: u16, current_flags: u8, use_carry: bool) -> (u16, u8) {
         )
     };
 
-    let flags = (if c { flags::CARRY } else { 0x00 })
-        | (if n { flags::ADD_SUB } else { 0x00 })
-        | (if pv { flags::PARITY_OVERFLOW } else { 0x00 })
-        | (if x { flags::X } else { 0x00 })
-        | (if h { flags::HALF_CARRY } else { 0x00 })
-        | (if y { flags::Y } else { 0x00 })
-        | (if z { flags::ZERO } else { 0x00 })
-        | (if s { flags::SIGN } else { 0x00 });
+    let flags = pack_flags(c, n, pv, x, h, y, z, s);
 
     (result, flags)
 }

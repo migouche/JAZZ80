@@ -6,3 +6,5 @@ curl.sh
 /dist
 CHANGELOG.md
 .sccignore
+debtmap-report.json
+debtmap-report.md

@@ -798,6 +798,86 @@ impl VirtualDOS {
             self.upload_receiver = None;
         }
     }
+
+    fn write_argument(&mut self, data: u8) -> bool {
+        self.arg_buffer.push(data as char);
+        true
+    }
+
+    fn clear_command_buffers(&mut self) {
+        self.arg_buffer.clear();
+        self.out_queue.clear();
+        self.status = 0;
+    }
+
+    fn make_directory_from_argument(&mut self) {
+        let target = self.resolve_path(&self.arg_buffer);
+        self.fs.insert(target, Inode::Directory);
+        self.status = 0;
+    }
+
+    fn change_directory_from_argument(&mut self) {
+        let target = self.resolve_path(&self.arg_buffer);
+        if let Some(Inode::Directory) = self.fs.get(&target) {
+            self.cwd = target;
+            self.status = 0;
+        } else {
+            self.status = 1;
+        }
+    }
+
+    fn list_directory(&mut self) {
+        let mut listing = String::new();
+        let prefix = if self.cwd == "/" {
+            "/".to_string()
+        } else {
+            format!("{}/", self.cwd)
+        };
+
+        for (path, inode) in &self.fs {
+            if path.starts_with(&prefix) {
+                let remainder = &path[prefix.len()..];
+                // Only list direct children, not subdirectories
+                if !remainder.contains('/') && !remainder.is_empty() {
+                    let label = match inode {
+                        Inode::Directory => "[DIR] ",
+                        Inode::File(_) => "[FILE]",
+                    };
+                    listing.push_str(&format!("{} {}\r\n", label, remainder));
+                }
+            }
+        }
+        if listing.is_empty() {
+            listing.push_str("Empty\r\n");
+        }
+
+        self.out_queue.extend(listing.bytes());
+        self.status = if self.out_queue.is_empty() { 0 } else { 2 };
+    }
+
+    fn read_file_from_argument(&mut self) {
+        let target = self.resolve_path(&self.arg_buffer);
+        match self.fs.get(&target) {
+            Some(Inode::File(contents)) => {
+                self.out_queue.extend(contents.iter().cloned());
+                self.status = if self.out_queue.is_empty() { 0 } else { 2 };
+            }
+            _ => {
+                self.status = 1;
+            }
+        }
+    }
+
+    fn dispatch_command(&mut self, command: u8) {
+        match command {
+            0 => self.clear_command_buffers(),
+            1 => self.make_directory_from_argument(),
+            2 => self.change_directory_from_argument(),
+            3 => self.list_directory(),
+            4 => self.read_file_from_argument(),
+            _ => {}
+        }
+    }
 }
 
 impl IODevice for VirtualDOS {
@@ -828,77 +908,9 @@ impl IODevice for VirtualDOS {
         let base = self.port & 0xFF;
 
         if p == base {
-            // Push to argument buffer
-            self.arg_buffer.push(data as char);
-            true
+            self.write_argument(data)
         } else if p == base.wrapping_add(1) {
-            // Execute Command
-            match data {
-                0 => {
-                    // Clear Buffer
-                    self.arg_buffer.clear();
-                    self.out_queue.clear();
-                    self.status = 0;
-                }
-                1 => {
-                    // MKDIR
-                    let target = self.resolve_path(&self.arg_buffer);
-                    self.fs.insert(target, Inode::Directory);
-                    self.status = 0;
-                }
-                2 => {
-                    // CD
-                    let target = self.resolve_path(&self.arg_buffer);
-                    if let Some(Inode::Directory) = self.fs.get(&target) {
-                        self.cwd = target;
-                        self.status = 0;
-                    } else {
-                        self.status = 1; // Error: Not a directory
-                    }
-                }
-                3 => {
-                    // LS
-                    let mut listing = String::new();
-                    let prefix = if self.cwd == "/" {
-                        "/".to_string()
-                    } else {
-                        format!("{}/", self.cwd)
-                    };
-
-                    for (path, inode) in &self.fs {
-                        if path.starts_with(&prefix) {
-                            let remainder = &path[prefix.len()..];
-                            // Only list direct children, not subdirectories
-                            if !remainder.contains('/') && !remainder.is_empty() {
-                                let label = match inode {
-                                    Inode::Directory => "[DIR] ",
-                                    Inode::File(_) => "[FILE]",
-                                };
-                                listing.push_str(&format!("{} {}\r\n", label, remainder));
-                            }
-                        }
-                    }
-                    if listing.is_empty() {
-                        listing.push_str("Empty\r\n");
-                    }
-
-                    self.out_queue.extend(listing.bytes());
-                    self.status = if self.out_queue.is_empty() { 0 } else { 2 }; // Set Data Ready
-                }
-                4 => {
-                    let target = self.resolve_path(&self.arg_buffer);
-                    match self.fs.get(&target) {
-                        Some(Inode::File(contents)) => {
-                            self.out_queue.extend(contents.iter().cloned());
-                            self.status = if self.out_queue.is_empty() { 0 } else { 2 };
-                        }
-                        _ => {
-                            self.status = 1; // Error: not found or is a directory
-                        }
-                    }
-                }
-                _ => {}
-            }
+            self.dispatch_command(data);
             true
         } else {
             false
@@ -981,5 +993,57 @@ impl DeviceWithUi for VirtualDOS {
             self.upload_file();
         }
         self.is_open = open;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_argument(dos: &mut VirtualDOS, argument: &str) {
+        for byte in argument.bytes() {
+            assert!(dos.write_out(0x20, byte));
+        }
+    }
+
+    #[test]
+    fn virtual_dos_routes_commands_and_preserves_handled_results() {
+        let mut dos = VirtualDOS::new(0x20);
+
+        assert!(!dos.write_out(0x21 + 0x10, 0));
+        write_argument(&mut dos, "docs");
+        assert!(dos.write_out(0x21, 1));
+        assert_eq!(dos.read_in(0x22), Some(0));
+
+        assert!(dos.write_out(0x21, 0xFF));
+        assert_eq!(dos.read_in(0x22), Some(0));
+
+        assert!(dos.write_out(0x21, 0));
+        write_argument(&mut dos, "docs");
+        assert!(dos.write_out(0x21, 2));
+        assert_eq!(dos.cwd, "/docs");
+
+        assert!(dos.write_out(0x21, 0));
+        write_argument(&mut dos, "missing");
+        assert!(dos.write_out(0x21, 2));
+        assert_eq!(dos.read_in(0x22), Some(1));
+    }
+
+    #[test]
+    fn virtual_dos_file_command_buffers_data_and_clears_status_after_reads() {
+        let mut dos = VirtualDOS::new(0x20);
+        dos.fs
+            .insert("/readme".to_string(), Inode::File(vec![b'O', b'K']));
+
+        write_argument(&mut dos, "readme");
+        assert!(dos.write_out(0x21, 4));
+        assert_eq!(dos.read_in(0x22), Some(2));
+        assert_eq!(dos.read_in(0x20), Some(b'O'));
+        assert_eq!(dos.read_in(0x22), Some(2));
+        assert_eq!(dos.read_in(0x20), Some(b'K'));
+        assert_eq!(dos.read_in(0x22), Some(0));
+
+        assert!(dos.write_out(0x21, 0));
+        assert_eq!(dos.read_in(0x22), Some(0));
     }
 }
