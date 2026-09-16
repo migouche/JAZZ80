@@ -1,4 +1,4 @@
-use crate::traits::SyncronousComponent;
+use crate::traits::SynchronousComponent;
 
 const DAA_OPCODE: u8 = 0x27;
 

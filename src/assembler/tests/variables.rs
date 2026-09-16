@@ -1,9 +1,9 @@
-use crate::assembler::assemble;
+use crate::assembler::assemble_with_metadata;
 
 // Helper to assemble single line
 fn asm(code: &str) -> Vec<u8> {
-    assemble(code)
-        .map(|(bytes, _, _, _)| bytes)
+    assemble_with_metadata(code)
+        .map(|result| result.bytes)
         .unwrap_or_else(|e| panic!("Failed to assemble '{}': {}", code, e))
 }
 
@@ -99,12 +99,12 @@ fn test_equ_constants() {
     DONE:
         RET
     ";
-    let (bytes, symbols, _, _) = assemble(code).unwrap();
+    let result = assemble_with_metadata(code).unwrap();
 
     assert_eq!(
-        bytes,
+        result.bytes,
         vec![0x3E, 0x2A, 0xD3, 0x80, 0xDB, 0x81, 0xC3, 0x09, 0x00, 0xC9]
     );
-    assert_eq!(symbols["TERM_DATA"].address, 0x80);
-    assert_eq!(symbols["TERM_STATUS"].address, 0x81);
+    assert_eq!(result.symbols["TERM_DATA"].address, 0x80);
+    assert_eq!(result.symbols["TERM_STATUS"].address, 0x81);
 }

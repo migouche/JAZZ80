@@ -1,5 +1,5 @@
 use crate::cpu::tests::setup_cpu;
-use crate::traits::{IODevice, SyncronousComponent};
+use crate::traits::{IODevice, SynchronousComponent};
 use std::cell::RefCell;
 use std::rc::Rc;
 

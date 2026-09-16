@@ -1,6 +1,6 @@
 use crate::cpu::RegisterPair;
 use crate::cpu::tests::setup_cpu;
-use crate::traits::SyncronousComponent;
+use crate::traits::SynchronousComponent;
 use rstest::rstest;
 
 #[rstest]

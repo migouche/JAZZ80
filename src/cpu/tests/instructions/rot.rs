@@ -2,7 +2,7 @@ use rstest::rstest;
 
 use crate::cpu::tests::setup_cpu;
 use crate::cpu::{Flag, GPR};
-use crate::traits::SyncronousComponent;
+use crate::traits::SynchronousComponent;
 
 #[rstest]
 // RLCA

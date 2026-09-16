@@ -1,5 +1,5 @@
 use crate::cpu::GPR;
-use crate::{cpu::tests::setup_cpu, traits::SyncronousComponent};
+use crate::{cpu::tests::setup_cpu, traits::SynchronousComponent};
 use rstest::rstest;
 
 const SCF_OPCODE: u8 = 0x37;

@@ -4,7 +4,10 @@ use std::str::FromStr;
 use crate::cpu::alu::rot::RotOperation;
 use crate::cpu::{ALUOperation, Condition, RegOps, Rp2Ops, RpOps};
 
+mod encoding;
 pub mod keywords;
+mod lexer;
+mod parser;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
@@ -49,32 +52,20 @@ pub struct Symbol {
     pub source_order: usize,
 }
 
-struct AssemblyResult {
-    bytes: Vec<u8>,
-    symbols: HashMap<String, Symbol>,
-    address_to_line: HashMap<u16, usize>,
-    line_to_address: HashMap<usize, u16>,
-    image: Vec<(u16, u8)>,
+#[derive(Debug, Clone)]
+pub struct AssemblyLine {
+    pub address: u16,
+    pub bytes: Vec<u8>,
 }
 
-pub fn assemble(
-    code: &str,
-) -> Result<
-    (
-        Vec<u8>,
-        HashMap<String, Symbol>,
-        HashMap<u16, usize>,
-        HashMap<usize, u16>,
-    ),
-    String,
-> {
-    let result = assemble_source(code)?;
-    Ok((
-        result.bytes,
-        result.symbols,
-        result.address_to_line,
-        result.line_to_address,
-    ))
+#[derive(Debug, Clone)]
+pub struct AssemblyResult {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) symbols: HashMap<String, Symbol>,
+    pub(crate) address_to_line: HashMap<u16, usize>,
+    pub(crate) line_to_address: HashMap<usize, u16>,
+    pub(crate) image: Vec<(u16, u8)>,
+    pub lines: HashMap<usize, AssemblyLine>,
 }
 
 pub fn assemble_binary(code: &str) -> Result<Vec<u8>, String> {
@@ -82,11 +73,9 @@ pub fn assemble_binary(code: &str) -> Result<Vec<u8>, String> {
     let Some(first_address) = image.iter().map(|(address, _)| *address).min() else {
         return Ok(Vec::new());
     };
-    let highest_address = image
-        .iter()
-        .map(|(address, _)| *address)
-        .max()
-        .expect("image is known to be non-empty");
+    let Some(highest_address) = image.iter().map(|(address, _)| *address).max() else {
+        return Ok(Vec::new());
+    };
 
     let mut bytes = vec![0; (highest_address - first_address) as usize + 1];
     for (address, byte) in image {
@@ -95,8 +84,8 @@ pub fn assemble_binary(code: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-pub fn assemble_absolute(code: &str) -> Result<Vec<(u16, u8)>, String> {
-    Ok(assemble_source(code)?.image)
+pub fn assemble_with_metadata(code: &str) -> Result<AssemblyResult, String> {
+    assemble_source(code)
 }
 
 fn assemble_source(code: &str) -> Result<AssemblyResult, String> {
@@ -279,12 +268,27 @@ fn assemble_source(code: &str) -> Result<AssemblyResult, String> {
         }
 
         instructions.push((line_idx, current_pc, tokens));
-        current_pc += bytes.len() as u16;
+        let available = u16::MAX as usize - current_pc as usize;
+        if bytes.len() > available {
+            return Err(format!("Line {}: address space exceeds 64K", line_idx + 1));
+        }
+        current_pc = current_pc
+            .checked_add(bytes.len() as u16)
+            .ok_or_else(|| format!("Line {}: address space exceeds 64K", line_idx + 1))?;
     }
 
+    emit_assembly(instructions, labels, line_addresses)
+}
+
+fn emit_assembly(
+    instructions: Vec<(usize, u16, Vec<Token>)>,
+    labels: HashMap<String, Symbol>,
+    line_addresses: HashMap<usize, u16>,
+) -> Result<AssemblyResult, String> {
     let mut output = Vec::new();
     let mut address_to_line = HashMap::new();
     let mut image = Vec::new();
+    let mut lines = HashMap::new();
     let label_addresses: HashMap<String, u16> =
         labels.iter().map(|(k, v)| (k.clone(), v.address)).collect();
 
@@ -292,23 +296,36 @@ fn assemble_source(code: &str) -> Result<AssemblyResult, String> {
         let bytes = parse_instruction(&tokens, pc, &label_addresses, false)
             .map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
 
+        lines.insert(
+            line_idx + 1,
+            AssemblyLine {
+                address: pc,
+                bytes: bytes.clone(),
+            },
+        );
+
         output.extend(&bytes);
 
         let is_org = matches!(tokens.first(), Some(Token::Identifier(m)) if m == "ORG");
         if !is_org {
             for (offset, byte) in bytes.iter().enumerate() {
-                image.push((pc + offset as u16, *byte));
+                let address = pc
+                    .checked_add(offset as u16)
+                    .ok_or_else(|| format!("Line {}: address space exceeds 64K", line_idx + 1))?;
+                image.push((address, *byte));
             }
         }
 
         address_to_line.insert(pc, line_idx + 1);
     }
+
     Ok(AssemblyResult {
         bytes: output,
         symbols: labels,
         address_to_line,
         line_to_address: line_addresses,
         image,
+        lines,
     })
 }
 
@@ -341,262 +358,11 @@ fn qualify_local_tokens(
 }
 
 fn tokenize(text: &str) -> Result<Vec<Token>, String> {
-    let mut tokens = Vec::new();
-    let mut chars = text.chars().peekable();
-
-    while let Some(&c) = chars.peek() {
-        match c {
-            ':' => {
-                tokens.push(Token::Colon);
-                chars.next();
-            }
-            '"' => {
-                chars.next(); // consume "
-                let mut s = String::new();
-                while let Some(&c) = chars.peek() {
-                    if c == '"' {
-                        chars.next();
-                        break;
-                    }
-                    s.push(c);
-                    chars.next();
-                }
-                tokens.push(Token::String(s));
-            }
-            ',' => {
-                tokens.push(Token::Comma);
-                chars.next();
-            }
-            '(' => {
-                tokens.push(Token::OpenParen);
-                chars.next();
-            }
-            ')' => {
-                tokens.push(Token::CloseParen);
-                chars.next();
-            }
-            '+' => {
-                tokens.push(Token::Plus);
-                chars.next();
-            }
-            '-' => {
-                tokens.push(Token::Minus);
-                chars.next();
-            }
-            c if c.is_whitespace() => {
-                chars.next();
-            }
-            c if c.is_alphabetic() || c == '_' || c == '.' => {
-                let mut ident = String::new();
-                while let Some(&c) = chars.peek() {
-                    if c.is_alphanumeric() || c == '_' || c == '\'' || c == '.' {
-                        ident.push(c);
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                let upper = ident.to_ascii_uppercase();
-
-                // Check for Hex number without leading zero (e.g. FFFFH)
-                // This is technically compliant with some assemblers but violates strict Z80 (requires leading 0-9)
-                // We add this to satisfy tests expecting FFFFH as a number.
-                let is_hex_candidate = upper.ends_with('H')
-                    && upper.len() > 1
-                    && upper[..upper.len() - 1]
-                        .chars()
-                        .all(|c| c.is_ascii_hexdigit());
-
-                if is_hex_candidate {
-                    if let Ok(val) = u16::from_str_radix(&upper[..upper.len() - 1], 16) {
-                        tokens.push(Token::Number(val));
-                    } else {
-                        // Overflow or error, fallback to identifier
-                        tokens.push(Token::Identifier(upper));
-                    }
-                } else {
-                    tokens.push(Token::Identifier(upper));
-                }
-            }
-            c if c.is_ascii_digit() => {
-                let mut num_str = String::new();
-                let mut is_hex = false;
-
-                // Check for 0x prefix
-                if c == '0' {
-                    chars.next(); // consume 0
-                    if let Some(&nc) = chars.peek() {
-                        if nc == 'x' || nc == 'X' {
-                            chars.next(); // consume x
-                            is_hex = true;
-                        } else {
-                            num_str.push('0'); // restore 0 if not hex prefix
-                        }
-                    } else {
-                        num_str.push('0');
-                    }
-                }
-
-                // Allow standard hex digits if not prefix (handling implicit hex if needed, but sticking to 0x for clarity unless we see chars)
-                while let Some(&c) = chars.peek() {
-                    if c.is_ascii_hexdigit() {
-                        num_str.push(c);
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-
-                // Check for 'h' suffix
-                if !is_hex
-                    && !num_str.is_empty()
-                    && let Some(&nc) = chars.peek()
-                    && (nc == 'H' || nc == 'h')
-                {
-                    is_hex = true;
-                    chars.next();
-                }
-
-                let val = if is_hex {
-                    u16::from_str_radix(&num_str, 16).map_err(|_| "Invalid hex number")?
-                } else {
-                    num_str.parse::<u16>().map_err(|_| "Invalid number")?
-                };
-                tokens.push(Token::Number(val));
-            }
-            // Handle simple hex like $FF
-            '$' => {
-                chars.next();
-                let mut num_str = String::new();
-                while let Some(&c) = chars.peek() {
-                    if c.is_ascii_hexdigit() {
-                        num_str.push(c);
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                let val = u16::from_str_radix(&num_str, 16).map_err(|_| "Invalid hex number")?;
-                tokens.push(Token::Number(val));
-            }
-            _ => return Err(format!("Unexpected character: {}", c)),
-        }
-    }
-    Ok(tokens)
+    lexer::tokenize(text)
 }
 
 fn parse_operands(tokens: &[Token]) -> Result<Vec<Operand>, String> {
-    let mut operands = Vec::new();
-    if tokens.is_empty() {
-        return Ok(operands);
-    }
-
-    let mut i = 0;
-    while i < tokens.len() {
-        if i > 0 {
-            if let Token::Comma = tokens[i] {
-                i += 1;
-            } else {
-                return Err("Expected comma".to_string());
-            }
-        }
-        if i >= tokens.len() {
-            break;
-        }
-
-        match &tokens[i] {
-            Token::Minus => {
-                i += 1;
-                if i >= tokens.len() {
-                    return Err("Expected number after minus".to_string());
-                }
-                if let Token::Number(n) = tokens[i] {
-                    let val = -(n as i16) as u16;
-                    operands.push(Operand::Immediate(val));
-                    i += 1;
-                } else {
-                    return Err("Expected number after minus".to_string());
-                }
-            }
-            Token::Identifier(r) => {
-                if is_condition(r) {
-                    operands.push(Operand::Condition(r.clone()));
-                } else if is_register(r) {
-                    operands.push(Operand::Register(r.clone()));
-                } else {
-                    operands.push(Operand::Label(r.clone()));
-                }
-                i += 1;
-            }
-            Token::String(s) => {
-                operands.push(Operand::StringLiteral(s.clone()));
-                i += 1;
-            }
-            Token::Number(n) => {
-                operands.push(Operand::Immediate(*n));
-                i += 1;
-            }
-            Token::OpenParen => {
-                i += 1;
-                if i >= tokens.len() {
-                    return Err("Unexpected end in parens".to_string());
-                }
-
-                match &tokens[i] {
-                    Token::Number(n) => {
-                        operands.push(Operand::IndirectImmediate(*n));
-                        i += 1;
-                    }
-                    Token::Identifier(r) => {
-                        if is_register(r) {
-                            let reg = r.clone();
-                            i += 1;
-                            if i < tokens.len() && matches!(tokens[i], Token::Plus | Token::Minus) {
-                                // (IX+d)
-                                let sign = match tokens[i] {
-                                    Token::Plus => 1,
-                                    Token::Minus => -1,
-                                    _ => 1,
-                                };
-                                i += 1;
-                                if i >= tokens.len() {
-                                    return Err("Expected offset".to_string());
-                                }
-                                if let Token::Number(offset) = tokens[i] {
-                                    let final_offset = (offset as i16 * sign as i16) as i8;
-                                    operands.push(Operand::IndirectIndex(reg, final_offset));
-                                    i += 1;
-                                } else {
-                                    return Err("Expected number offset".to_string());
-                                }
-                            } else {
-                                operands.push(Operand::IndirectRegister(reg));
-                            }
-                        } else {
-                            operands.push(Operand::IndirectLabel(r.clone()));
-                            i += 1;
-                        }
-                    }
-                    _ => return Err("Invalid start of indirect operand".to_string()),
-                }
-
-                if i >= tokens.len() || tokens[i] != Token::CloseParen {
-                    return Err("Expected )".to_string());
-                }
-                i += 1;
-            }
-            _ => return Err("Invalid operand".to_string()),
-        }
-    }
-    Ok(operands)
-}
-
-fn is_condition(s: &str) -> bool {
-    matches!(s, "NZ" | "Z" | "NC" | "PO" | "PE" | "P" | "M")
-}
-
-fn is_register(s: &str) -> bool {
-    keywords::REGISTERS.contains(&s)
+    parser::parse_operands(tokens)
 }
 
 fn resolve_immediate(
@@ -606,17 +372,21 @@ fn resolve_immediate(
 ) -> Result<u16, String> {
     match op {
         Operand::Immediate(n) => Ok(*n),
-        Operand::Label(s) => {
-            if let Some(val) = labels.get(s) {
-                Ok(*val)
-            } else if is_dry_run {
-                Ok(0)
-            } else {
-                Err(format!("Label not found: {}", s))
-            }
-        }
+        Operand::Label(s) => resolve_label(s, labels, is_dry_run),
         _ => Err("Not an immediate".to_string()),
     }
+}
+
+fn resolve_label(
+    label: &str,
+    labels: &HashMap<String, u16>,
+    is_dry_run: bool,
+) -> Result<u16, String> {
+    labels
+        .get(label)
+        .copied()
+        .or_else(|| is_dry_run.then_some(0))
+        .ok_or_else(|| format!("Label not found: {}", label))
 }
 
 fn resolve_indirect(
@@ -626,15 +396,7 @@ fn resolve_indirect(
 ) -> Result<u16, String> {
     match op {
         Operand::IndirectImmediate(n) => Ok(*n),
-        Operand::IndirectLabel(s) => {
-            if let Some(val) = labels.get(s) {
-                Ok(*val)
-            } else if is_dry_run {
-                Ok(0)
-            } else {
-                Err(format!("Label not found: {}", s))
-            }
-        }
+        Operand::IndirectLabel(s) => resolve_label(s, labels, is_dry_run),
         _ => Err("Not an indirect address".to_string()),
     }
 }
@@ -653,16 +415,16 @@ fn parse_instruction(
 
     match mnemonic.as_str() {
         "LD" => encode_ld(&operands, labels, is_dry_run),
-        "INC" => encode_alu_uni(0x04, &operands),
-        "DEC" => encode_alu_uni(0x05, &operands),
-        "ADD" => encode_add(&operands, labels, is_dry_run),
-        "ADC" => encode_alu_op(ALUOperation::ADC, &operands, labels, is_dry_run),
-        "SUB" => encode_alu_op(ALUOperation::SUB, &operands, labels, is_dry_run),
+        "INC" => encoding::encode_alu_uni(0x04, &operands),
+        "DEC" => encoding::encode_alu_uni(0x05, &operands),
+        "ADD" => encoding::encode_add(&operands, labels, is_dry_run),
+        "ADC" => encoding::encode_alu_op(ALUOperation::ADC, &operands, labels, is_dry_run),
+        "SUB" => encoding::encode_alu_op(ALUOperation::SUB, &operands, labels, is_dry_run),
         "SBC" => encode_sbc(&operands, labels, is_dry_run),
-        "AND" => encode_alu_op(ALUOperation::AND, &operands, labels, is_dry_run),
-        "XOR" => encode_alu_op(ALUOperation::XOR, &operands, labels, is_dry_run),
-        "OR" => encode_alu_op(ALUOperation::OR, &operands, labels, is_dry_run),
-        "CP" => encode_alu_op(ALUOperation::CP, &operands, labels, is_dry_run),
+        "AND" => encoding::encode_alu_op(ALUOperation::AND, &operands, labels, is_dry_run),
+        "XOR" => encoding::encode_alu_op(ALUOperation::XOR, &operands, labels, is_dry_run),
+        "OR" => encoding::encode_alu_op(ALUOperation::OR, &operands, labels, is_dry_run),
+        "CP" => encoding::encode_alu_op(ALUOperation::CP, &operands, labels, is_dry_run),
 
         "HALT" => Ok(vec![0x76]),
         "NOP" => Ok(vec![0x00]),
@@ -671,7 +433,7 @@ fn parse_instruction(
         "RETI" => Ok(vec![0xED, 0x4D]),
         "RETN" => Ok(vec![0xED, 0x45]),
         "IM" => encode_im(&operands),
-        "EX" => encode_ex(&operands),
+        "EX" => encoding::encode_ex(&operands),
         "EXX" => Ok(vec![0xD9]),
         "DAA" => Ok(vec![0x27]),
         "CPL" => Ok(vec![0x2F]),
@@ -682,10 +444,10 @@ fn parse_instruction(
         "RLCA" => Ok(vec![0x07]),
         "RRCA" => Ok(vec![0x0F]),
 
-        "JP" => encode_jp(&operands, labels, is_dry_run),
-        "JR" => encode_jr(&operands, pc, labels, is_dry_run),
+        "JP" => encoding::encode_jp(&operands, labels, is_dry_run),
+        "JR" => encoding::encode_jr(&operands, pc, labels, is_dry_run),
         "DJNZ" => encode_djnz(&operands, pc, labels, is_dry_run),
-        "CALL" => encode_call(&operands, labels, is_dry_run),
+        "CALL" => encoding::encode_call(&operands, labels, is_dry_run),
         "RET" => encode_ret(&operands),
         "RST" => encode_rst(&operands),
 
@@ -723,11 +485,7 @@ fn parse_instruction(
                         bytes.extend_from_slice(s.as_bytes());
                     }
                     Operand::Label(l) => {
-                        let val = if is_dry_run {
-                            0
-                        } else {
-                            *labels.get(&l).unwrap_or(&0)
-                        };
+                        let val = resolve_label(&l, labels, is_dry_run)?;
                         if !is_dry_run && val > 255 {
                             return Err(format!(
                                 "Label '{}' value {} is too large for DB (byte)",
@@ -750,11 +508,7 @@ fn parse_instruction(
                         bytes.push((n >> 8) as u8);
                     }
                     Operand::Label(l) => {
-                        let val = if is_dry_run {
-                            0
-                        } else {
-                            *labels.get(&l).unwrap_or(&0)
-                        };
+                        let val = resolve_label(&l, labels, is_dry_run)?;
                         bytes.push((val & 0xFF) as u8);
                         bytes.push((val >> 8) as u8);
                     }
@@ -797,14 +551,14 @@ fn parse_instruction(
         "OUTD" => Ok(vec![0xED, 0xAB]),
         "OTDR" => Ok(vec![0xED, 0xBB]),
 
-        "RLC" => encode_rot_op(RotOperation::RLC, &operands),
-        "RRC" => encode_rot_op(RotOperation::RRC, &operands),
-        "RL" => encode_rot_op(RotOperation::RL, &operands),
-        "RR" => encode_rot_op(RotOperation::RR, &operands),
-        "SLA" => encode_rot_op(RotOperation::SLA, &operands),
-        "SRA" => encode_rot_op(RotOperation::SRA, &operands),
-        "SLL" => encode_rot_op(RotOperation::SLL, &operands),
-        "SRL" => encode_rot_op(RotOperation::SRL, &operands),
+        "RLC" => encoding::encode_rot_op(RotOperation::RLC, &operands),
+        "RRC" => encoding::encode_rot_op(RotOperation::RRC, &operands),
+        "RL" => encoding::encode_rot_op(RotOperation::RL, &operands),
+        "RR" => encoding::encode_rot_op(RotOperation::RR, &operands),
+        "SLA" => encoding::encode_rot_op(RotOperation::SLA, &operands),
+        "SRA" => encoding::encode_rot_op(RotOperation::SRA, &operands),
+        "SLL" => encoding::encode_rot_op(RotOperation::SLL, &operands),
+        "SRL" => encoding::encode_rot_op(RotOperation::SRL, &operands),
         "BIT" => encode_bit_op(0x40, &operands),
         "RES" => encode_bit_op(0x80, &operands),
         "SET" => encode_bit_op(0xC0, &operands),
@@ -948,7 +702,8 @@ fn encode_ld(ops: &[Operand], labels: &HashMap<String, u16>, dry: bool) -> Resul
                 return Ok(vec![0x2A, low, high]);
             }
             if r == "BC" || r == "DE" || r == "SP" {
-                let rpc = get_rp_code(r).unwrap();
+                let rpc = get_rp_code(r)
+                    .ok_or_else(|| format!("Invalid register pair '{}' for LD r, (nn)", r))?;
                 return Ok(vec![0xED, 0x4B | (rpc << 4), low, high]);
             }
             if r == "IX" {
@@ -975,7 +730,8 @@ fn encode_ld(ops: &[Operand], labels: &HashMap<String, u16>, dry: bool) -> Resul
                 return Ok(vec![0x22, low, high]);
             }
             if r == "BC" || r == "DE" || r == "SP" {
-                let rpc = get_rp_code(r).unwrap();
+                let rpc = get_rp_code(r)
+                    .ok_or_else(|| format!("Invalid register pair '{}' for LD (nn), r", r))?;
                 return Ok(vec![0xED, 0x43 | (rpc << 4), low, high]);
             }
             if r == "IX" {
@@ -988,69 +744,6 @@ fn encode_ld(ops: &[Operand], labels: &HashMap<String, u16>, dry: bool) -> Resul
         }
         _ => Err("Unsupported instruction".to_string()),
     }
-}
-
-fn encode_alu_uni(base: u8, ops: &[Operand]) -> Result<Vec<u8>, String> {
-    if ops.len() != 1 {
-        return Err("Needs 1 Op".to_string());
-    }
-    match &ops[0] {
-        Operand::Register(r) => {
-            if let Some(rc) = get_r_code(r) {
-                return Ok(vec![base | (rc << 3)]);
-            }
-            if let Some(rpc) = get_rp_code(r) {
-                let val = if base == 0x04 { 0x03 } else { 0x0B };
-                return Ok(vec![val | (rpc << 4)]);
-            }
-            if r == "IX" {
-                let val = if base == 0x04 { 0x23 } else { 0x2B };
-                return Ok(vec![0xDD, val]);
-            }
-            if r == "IY" {
-                let val = if base == 0x04 { 0x23 } else { 0x2B };
-                return Ok(vec![0xFD, val]);
-            }
-            Err("Invalid register for INC/DEC".to_string())
-        }
-        Operand::IndirectRegister(r) if r == "HL" => Ok(vec![base | (6 << 3)]),
-        Operand::IndirectIndex(idx, d) => {
-            let prefix = if idx == "IX" { 0xDD } else { 0xFD };
-            Ok(vec![prefix, base | (6 << 3), *d as u8])
-        }
-        _ => Err("Invalid INC/DEC".to_string()),
-    }
-}
-
-fn encode_add(
-    ops: &[Operand],
-    labels: &HashMap<String, u16>,
-    dry: bool,
-) -> Result<Vec<u8>, String> {
-    if ops.len() == 2
-        && let Operand::Register(dest) = &ops[0]
-    {
-        if dest == "HL"
-            && let Operand::Register(src) = &ops[1]
-            && let Some(rpc) = get_rp_code(src)
-        {
-            return Ok(vec![0x09 | (rpc << 4)]);
-        }
-        if dest == "IX" || dest == "IY" {
-            let prefix = if dest == "IX" { 0xDD } else { 0xFD };
-            if let Operand::Register(src) = &ops[1] {
-                let pp = match src.as_str() {
-                    "BC" => 0,
-                    "DE" => 1,
-                    "IX" | "IY" => 2,
-                    "SP" => 3,
-                    _ => return Err("Invalid operand for ADD index".to_string()),
-                };
-                return Ok(vec![prefix, 0x09 | (pp << 4)]);
-            }
-        }
-    }
-    encode_alu_op(ALUOperation::ADD, ops, labels, dry)
 }
 
 fn encode_sbc(
@@ -1066,169 +759,11 @@ fn encode_sbc(
     {
         return Ok(vec![0xED, 0x42 | (rpc << 4)]);
     }
-    encode_alu_op(ALUOperation::SBC, ops, labels, dry)
-}
-
-fn encode_alu_op(
-    op: ALUOperation,
-    ops: &[Operand],
-    labels: &HashMap<String, u16>,
-    dry: bool,
-) -> Result<Vec<u8>, String> {
-    let op_code = op as u8;
-    let base_r = 0x80 | (op_code << 3);
-    let base_n = 0xC6 | (op_code << 3);
-    encode_alu_bin(base_r, base_n, ops, labels, dry)
-}
-
-fn encode_rot_op(op: RotOperation, ops: &[Operand]) -> Result<Vec<u8>, String> {
-    let base = (op as u8) << 3;
-    encode_rot_shift(base, ops)
-}
-
-fn encode_alu_bin(
-    base_r: u8,
-    base_n: u8,
-    ops: &[Operand],
-    labels: &HashMap<String, u16>,
-    dry: bool,
-) -> Result<Vec<u8>, String> {
-    if ops.len() != 1 {
-        if ops.len() == 2
-            && let Operand::Register(r) = &ops[0]
-            && r == "A"
-        {
-            return encode_alu_bin(base_r, base_n, &ops[1..], labels, dry);
-        }
-        return Err("ALU ops count error".to_string());
-    }
-    match &ops[0] {
-        Operand::Register(r) => {
-            if let Some(rc) = get_r_code(r) {
-                Ok(vec![base_r | rc])
-            } else if r == "IXH" {
-                Ok(vec![0xDD, base_r | 4])
-            } else if r == "IXL" {
-                Ok(vec![0xDD, base_r | 5])
-            } else {
-                Err("Invalid ALU register".to_string())
-            }
-        }
-        op if matches!(op, Operand::Immediate(_) | Operand::Label(_)) => {
-            let n = resolve_immediate(op, labels, dry)?;
-            Ok(vec![base_n, n as u8])
-        }
-        Operand::IndirectRegister(r) if r == "HL" => Ok(vec![base_r | 6]),
-        Operand::IndirectIndex(idx, d) => {
-            let prefix = if idx == "IX" { 0xDD } else { 0xFD };
-            Ok(vec![prefix, base_r | 6, *d as u8])
-        }
-        _ => Err("Invalid ALU operand".to_string()),
-    }
+    encoding::encode_alu_op(ALUOperation::SBC, ops, labels, dry)
 }
 
 fn get_condition_code(s: &str) -> Option<u8> {
     Condition::from_str(s).ok().map(|c| c as u8)
-}
-
-fn encode_jp(ops: &[Operand], labels: &HashMap<String, u16>, dry: bool) -> Result<Vec<u8>, String> {
-    match ops.len() {
-        1 => match &ops[0] {
-            op if matches!(
-                op,
-                Operand::Immediate(_)
-                    | Operand::Label(_)
-                    | Operand::IndirectImmediate(_)
-                    | Operand::IndirectLabel(_)
-            ) =>
-            {
-                let nn = if matches!(
-                    op,
-                    Operand::IndirectImmediate(_) | Operand::IndirectLabel(_)
-                ) {
-                    resolve_indirect(op, labels, dry)?
-                } else {
-                    resolve_immediate(op, labels, dry)?
-                };
-                Ok(vec![0xC3, (nn & 0xFF) as u8, (nn >> 8) as u8])
-            }
-            Operand::IndirectRegister(r) | Operand::Register(r) if r == "HL" => Ok(vec![0xE9]),
-            Operand::IndirectRegister(r) | Operand::Register(r) if r == "IX" => {
-                Ok(vec![0xDD, 0xE9])
-            }
-            Operand::IndirectRegister(r) | Operand::Register(r) if r == "IY" => {
-                Ok(vec![0xFD, 0xE9])
-            }
-            _ => Err("Invalid JP target".to_string()),
-        },
-        2 => {
-            let cond = match &ops[0] {
-                Operand::Condition(c) => Some(c.as_str()),
-                Operand::Register(r) if r == "C" => Some("C"),
-                _ => None,
-            };
-            if let Some(c) = cond
-                && let Some(cc) = get_condition_code(c)
-            {
-                let nn = if matches!(
-                    &ops[1],
-                    Operand::IndirectImmediate(_) | Operand::IndirectLabel(_)
-                ) {
-                    resolve_indirect(&ops[1], labels, dry)?
-                } else {
-                    resolve_immediate(&ops[1], labels, dry)?
-                };
-                return Ok(vec![0xC2 | (cc << 3), (nn & 0xFF) as u8, (nn >> 8) as u8]);
-            }
-            Err("Invalid JP condition/target".to_string())
-        }
-        _ => Err("Invalid JP args".to_string()),
-    }
-}
-
-fn encode_jr(
-    ops: &[Operand],
-    pc: u16,
-    labels: &HashMap<String, u16>,
-    dry: bool,
-) -> Result<Vec<u8>, String> {
-    // JR d / JR C, d
-    // Opcode size is 2 bytes. Offset is relative to PC+2.
-    // Target = (PC + 2) + offset (signed i8)
-    // Offset = Target - (PC + 2)
-    match ops.len() {
-        1 => {
-            // JR d
-            let target = resolve_immediate(&ops[0], labels, dry)?;
-            let offset_val = (target as i32) - ((pc as i32) + 2);
-            if !dry && !(-128..=127).contains(&offset_val) {
-                return Err("JR offset out of range".to_string());
-            }
-            Ok(vec![0x18, offset_val as i8 as u8])
-        }
-        2 => {
-            let cond = match &ops[0] {
-                Operand::Condition(c) => Some(c.as_str()),
-                Operand::Register(r) if r == "C" => Some("C"),
-                _ => None,
-            };
-            if let Some(c) = cond
-                && let Some(cc) = get_condition_code(c)
-            {
-                if cc > 3 {
-                    return Err("Invalid JR condition".to_string());
-                }
-                let target = resolve_immediate(&ops[1], labels, dry)?;
-                let offset_val = (target as i32) - ((pc as i32) + 2);
-                if !dry && !(-128..=127).contains(&offset_val) {
-                    return Err("JR offset out of range".to_string());
-                }
-                return Ok(vec![0x20 | (cc << 3), offset_val as i8 as u8]);
-            }
-            Err("Invalid JR args".to_string())
-        }
-        _ => Err("Invalid JR args".to_string()),
-    }
 }
 
 fn encode_djnz(
@@ -1246,75 +781,6 @@ fn encode_djnz(
         return Err("DJNZ offset out of range".to_string());
     }
     Ok(vec![0x10, offset_val as i8 as u8])
-}
-
-fn encode_call(
-    ops: &[Operand],
-    labels: &HashMap<String, u16>,
-    dry: bool,
-) -> Result<Vec<u8>, String> {
-    match ops.len() {
-        1 => {
-            let nn = match &ops[0] {
-                op if matches!(
-                    op,
-                    Operand::Immediate(_)
-                        | Operand::IndirectImmediate(_)
-                        | Operand::Label(_)
-                        | Operand::IndirectLabel(_)
-                ) =>
-                {
-                    if matches!(
-                        op,
-                        Operand::IndirectImmediate(_) | Operand::IndirectLabel(_)
-                    ) {
-                        resolve_indirect(op, labels, dry)?
-                    } else {
-                        resolve_immediate(op, labels, dry)?
-                    }
-                }
-                _ => return Err("CALL needs address".to_string()),
-            };
-            Ok(vec![0xCD, (nn & 0xFF) as u8, (nn >> 8) as u8])
-        }
-        2 => {
-            let cond = match &ops[0] {
-                Operand::Condition(c) => Some(c.as_str()),
-                Operand::Register(r) if r == "C" => Some("C"),
-                _ => None,
-            };
-            if let Some(c) = cond {
-                if let Some(cc) = get_condition_code(c) {
-                    let nn = match &ops[1] {
-                        op if matches!(
-                            op,
-                            Operand::Immediate(_)
-                                | Operand::IndirectImmediate(_)
-                                | Operand::Label(_)
-                                | Operand::IndirectLabel(_)
-                        ) =>
-                        {
-                            if matches!(
-                                op,
-                                Operand::IndirectImmediate(_) | Operand::IndirectLabel(_)
-                            ) {
-                                resolve_indirect(op, labels, dry)?
-                            } else {
-                                resolve_immediate(op, labels, dry)?
-                            }
-                        }
-                        _ => return Err("CALL needs address".to_string()),
-                    };
-                    Ok(vec![0xC4 | (cc << 3), (nn & 0xFF) as u8, (nn >> 8) as u8])
-                } else {
-                    Err("Bad cond".to_string())
-                }
-            } else {
-                Err("Call format error".to_string())
-            }
-        }
-        _ => Err("CALL args".to_string()),
-    }
 }
 
 fn encode_ret(ops: &[Operand]) -> Result<Vec<u8>, String> {
@@ -1382,36 +848,6 @@ fn encode_pop(ops: &[Operand]) -> Result<Vec<u8>, String> {
         }
     }
     Err("POP invalid".to_string())
-}
-
-fn encode_ex(ops: &[Operand]) -> Result<Vec<u8>, String> {
-    if ops.len() != 2 {
-        return Err("EX 2 ops".to_string());
-    }
-    match (&ops[0], &ops[1]) {
-        (Operand::Register(r1), Operand::Register(r2)) => {
-            if r1 == "DE" && r2 == "HL" {
-                return Ok(vec![0xEB]);
-            }
-            if r1 == "AF" && (r2 == "AF'" || r2 == "AF") {
-                return Ok(vec![0x08]);
-            }
-            Err("Invalid EX".to_string())
-        }
-        (Operand::IndirectRegister(r1), Operand::Register(r2)) if r1 == "SP" => {
-            if r2 == "HL" {
-                return Ok(vec![0xE3]);
-            }
-            if r2 == "IX" {
-                return Ok(vec![0xDD, 0xE3]);
-            }
-            if r2 == "IY" {
-                return Ok(vec![0xFD, 0xE3]);
-            }
-            Err("Invalid EX (SP)".to_string())
-        }
-        _ => Err("Invalid EX combo".to_string()),
-    }
 }
 
 fn encode_in(ops: &[Operand], labels: &HashMap<String, u16>, dry: bool) -> Result<Vec<u8>, String> {
@@ -1486,96 +922,6 @@ fn encode_im(ops: &[Operand]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests;
 
-fn encode_rot_shift(base: u8, ops: &[Operand]) -> Result<Vec<u8>, String> {
-    if ops.len() == 1 {
-        match &ops[0] {
-            Operand::Register(r) => {
-                if let Some(rc) = get_r_code(r) {
-                    Ok(vec![0xCB, base | rc])
-                } else {
-                    Err("Invalid register for Rotate/Shift".to_string())
-                }
-            }
-            Operand::IndirectRegister(r) if r == "HL" => Ok(vec![0xCB, base | 6]),
-            Operand::IndirectIndex(idx, d) => {
-                let prefix = if idx == "IX" { 0xDD } else { 0xFD };
-                Ok(vec![prefix, 0xCB, *d as u8, base | 6])
-            }
-            _ => Err("Invalid operand for Rotate/Shift".to_string()),
-        }
-    } else if ops.len() == 2 {
-        // Handle undocumented (IX+d), r
-        if let (Operand::IndirectIndex(idx, d), Operand::Register(r)) = (&ops[0], &ops[1]) {
-            if let Some(rc) = get_r_code(r) {
-                let prefix = if idx == "IX" { 0xDD } else { 0xFD };
-                // Order: Prefix, CB, d, Opcode|r
-                Ok(vec![prefix, 0xCB, *d as u8, base | rc])
-            } else {
-                Err("Invalid register2 for Rotate/Shift".to_string())
-            }
-        } else {
-            Err("Invalid operands for Rotate/Shift (2 ops)".to_string())
-        }
-    } else {
-        Err("Rotate/Shift expects 1 or 2 operands".to_string())
-    }
-}
-
 fn encode_bit_op(base: u8, ops: &[Operand]) -> Result<Vec<u8>, String> {
-    if ops.len() < 2 || ops.len() > 3 {
-        return Err("Bit op expects 2 or 3 operands".to_string());
-    }
-
-    let b = match &ops[0] {
-        Operand::Immediate(n) => *n,
-        _ => return Err("Bit index must be a number".to_string()),
-    };
-
-    if b > 7 {
-        return Err("Bit index must be 0-7".to_string());
-    }
-
-    let opcode_base = base + ((b as u8) << 3);
-
-    match &ops[1] {
-        Operand::Register(r) => {
-            if ops.len() != 2 {
-                return Err("Too many operands for Register target".to_string());
-            }
-            if let Some(rc) = get_r_code(r) {
-                Ok(vec![0xCB, opcode_base | rc])
-            } else {
-                Err("Invalid register".to_string())
-            }
-        }
-        Operand::IndirectRegister(reg) if reg == "HL" => {
-            if ops.len() != 2 {
-                return Err("Too many operands for (HL)".to_string());
-            }
-            Ok(vec![0xCB, opcode_base | 6])
-        }
-        Operand::IndirectIndex(idx, d) => {
-            let prefix = if idx == "IX" { 0xDD } else { 0xFD };
-            if ops.len() == 2 {
-                Ok(vec![prefix, 0xCB, *d as u8, opcode_base | 6])
-            } else {
-                // 3 operands: SET b, (IX+d), r
-                // Only for SET/RES. BIT does not have this.
-                // BIT base is 0x40.
-                if base == 0x40 {
-                    return Err("BIT does not support 3 operands".to_string());
-                }
-                if let Operand::Register(r) = &ops[2] {
-                    if let Some(rc) = get_r_code(r) {
-                        Ok(vec![prefix, 0xCB, *d as u8, opcode_base | rc])
-                    } else {
-                        Err("Invalid register 2".to_string())
-                    }
-                } else {
-                    Err("Third operand must be register".to_string())
-                }
-            }
-        }
-        _ => Err("Invalid target operand".to_string()),
-    }
+    encoding::encode_bit_op(base, ops)
 }

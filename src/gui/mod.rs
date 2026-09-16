@@ -1,4 +1,4 @@
-use crate::assembler::{Symbol, SymbolType, assemble, assemble_absolute, assemble_binary};
+use crate::assembler::{AssemblyLine, Symbol, SymbolType, assemble_binary, assemble_with_metadata};
 use eframe::egui::{self, TextBuffer};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -7,11 +7,12 @@ use std::rc::Rc;
 
 use crate::components::memories::mem_64k::Mem64k;
 use crate::cpu::{Flag, GPR, Z80A};
-use crate::traits::{MemoryMapper, SyncronousComponent};
+use crate::traits::{MemoryMapper, SynchronousComponent};
 
 use crate::components::devices::DeviceDefinition;
 use crate::ui_traits::DeviceWithUi;
 
+mod formatting;
 mod highlighting;
 
 #[cfg(target_arch = "wasm32")]
@@ -103,6 +104,8 @@ pub struct Z80App {
     address_to_line: HashMap<u16, usize>,
     #[serde(skip)]
     line_to_address: HashMap<usize, u16>,
+    #[serde(skip)]
+    assembly_lines: HashMap<usize, AssemblyLine>,
 
     #[serde(default)]
     symbol_display_prefs: HashMap<String, SymbolDisplayFormat>,
@@ -274,6 +277,7 @@ START:
             self.symbol_table.clear();
             self.address_to_line.clear();
             self.line_to_address.clear();
+            self.assembly_lines.clear();
             self.is_assembly_stale = false;
             self.last_error = None;
 
@@ -289,23 +293,24 @@ START:
         }
 
         let code = &active_tab.code;
-        let (bytes, symbols, addr_map, line_map, image, error) =
-            match (assemble(code), assemble_absolute(code)) {
-                (Ok((b, s, m, l)), Ok(image)) => (b, s, m, l, image, None),
-                (Err(e), _) => (
-                    Vec::new(),
-                    HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
-                    Vec::new(),
-                    Some(e),
+        let (bytes, symbols, addr_map, line_map, image, assembly_lines, error) =
+            match assemble_with_metadata(code) {
+                Ok(result) => (
+                    result.bytes,
+                    result.symbols,
+                    result.address_to_line,
+                    result.line_to_address,
+                    result.image,
+                    result.lines,
+                    None,
                 ),
-                (_, Err(e)) => (
+                Err(e) => (
                     Vec::new(),
                     HashMap::new(),
                     HashMap::new(),
                     HashMap::new(),
                     Vec::new(),
+                    HashMap::new(),
                     Some(e),
                 ),
             };
@@ -313,6 +318,7 @@ START:
         self.symbol_table = symbols;
         self.address_to_line = addr_map;
         self.line_to_address = line_map;
+        self.assembly_lines = assembly_lines;
         self.is_assembly_stale = false;
 
         if let Some(err) = error {
@@ -428,42 +434,13 @@ START:
         }
     }
 
-    fn binary_hexdump(bytes: &[u8]) -> String {
-        let mut lines = Vec::new();
-        for (offset, chunk) in bytes.chunks(16).enumerate() {
-            let start = offset * 16;
-            let hex = chunk
-                .iter()
-                .map(|b| format!("{:02X}", b))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let ascii = chunk
-                .iter()
-                .map(|b| {
-                    let c = *b as char;
-                    if c.is_ascii_graphic() || c == ' ' {
-                        c
-                    } else {
-                        '.'
-                    }
-                })
-                .collect::<String>();
-            lines.push(format!("{:04X}: {:<47} {}", start as u16, hex, ascii));
-        }
-        if lines.is_empty() {
-            "".to_string()
-        } else {
-            lines.join("\n")
-        }
-    }
-
     fn open_binary_tab(
         &mut self,
         path: PathBuf,
         bytes: Vec<u8>,
         storage: Option<&mut (dyn eframe::Storage + 'static)>,
     ) {
-        let hexdump = Self::binary_hexdump(&bytes);
+        let hexdump = formatting::binary_hexdump(&bytes);
         if let Some(idx) = self
             .tabs
             .iter()
@@ -791,6 +768,223 @@ START:
         }
     }
 
+    fn process_header_action(
+        &mut self,
+        action: HeaderAction,
+        ctx: &egui::Context,
+        frame: &mut eframe::Frame,
+    ) {
+        match action {
+            HeaderAction::NewFile => self.new_file(frame.storage_mut()),
+            HeaderAction::OpenFileDialog => self.open_file_dialog(frame.storage_mut()),
+            HeaderAction::OpenFile(path) => self.open_file(path, frame.storage_mut()),
+            HeaderAction::SaveFile => self.save_file(self.active_tab, frame.storage_mut()),
+            HeaderAction::SaveFileAs => self.save_file_as(frame.storage_mut()),
+            HeaderAction::AssembleBinary => self.assemble_binary_to_file(frame.storage_mut()),
+            HeaderAction::LoadBinary => self.load_binary_dialog(frame.storage_mut()),
+            HeaderAction::CloseTab(idx) => {
+                if self.tabs[idx].is_dirty {
+                    self.pending_modal = Some(ModalType::CloseTab(idx));
+                } else {
+                    self.close_tab(idx, frame.storage_mut());
+                }
+            }
+            HeaderAction::Quit => {
+                // This triggers on_close_event
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    fn render_registers_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Registers");
+        ui.separator();
+
+        let can_edit = !self.is_running || self.cpu.is_halted();
+
+        egui::Grid::new("regs_grid")
+            .striped(true)
+            .spacing([10.0, 8.0])
+            .show(ui, |ui| {
+                macro_rules! edit_16 {
+                    ($name:expr, $getter:expr, $setter:expr) => {
+                        ui.label($name);
+                        let val = $getter;
+                        let id = egui::Id::new($name);
+                        let mut s = ui.data_mut(|d| {
+                            d.get_temp_mut_or_insert_with(id, || format!("{:04X}", val))
+                                .clone()
+                        });
+                        let resp = ui.add_enabled(
+                            can_edit,
+                            egui::TextEdit::singleline(&mut s)
+                                .desired_width(45.0)
+                                .font(egui::TextStyle::Monospace),
+                        );
+                        if resp.changed() {
+                            if let Ok(v) = u16::from_str_radix(s.trim(), 16) {
+                                $setter(v);
+                            }
+                            ui.data_mut(|d| d.insert_temp(id, s));
+                        } else if !resp.has_focus() {
+                            ui.data_mut(|d| d.insert_temp(id, format!("{:04X}", val)));
+                        }
+                    };
+                }
+
+                macro_rules! edit_8 {
+                    ($name:expr, $id:expr, $getter:expr, $setter:expr) => {
+                        ui.label($name);
+                        let val = $getter;
+                        let id = egui::Id::new($id);
+                        let mut s = ui.data_mut(|d| {
+                            d.get_temp_mut_or_insert_with(id, || format!("{:02X}", val))
+                                .clone()
+                        });
+                        let resp = ui.add_enabled(
+                            can_edit,
+                            egui::TextEdit::singleline(&mut s)
+                                .desired_width(25.0)
+                                .font(egui::TextStyle::Monospace),
+                        );
+                        if resp.changed() {
+                            if let Ok(v) = u8::from_str_radix(s.trim(), 16) {
+                                $setter(v);
+                            }
+                            ui.data_mut(|d| d.insert_temp(id, s));
+                        } else if !resp.has_focus() {
+                            ui.data_mut(|d| d.insert_temp(id, format!("{:02X}", val)));
+                        }
+                    };
+                }
+
+                edit_16!("PC", self.cpu.get_pc(), |v| self.cpu.set_pc(v));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+                edit_16!("SP", self.cpu.get_sp(), |v| self.cpu.set_sp(v));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+                edit_16!("IX", self.cpu.get_ix(), |v| self.cpu.set_ix(v));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+                edit_16!("IY", self.cpu.get_iy(), |v| self.cpu.set_iy(v));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+
+                ui.separator();
+                ui.separator();
+                ui.separator();
+                ui.separator();
+                ui.end_row();
+
+                let regs = [
+                    ("A", GPR::A),
+                    ("F", GPR::F),
+                    ("B", GPR::B),
+                    ("C", GPR::C),
+                    ("D", GPR::D),
+                    ("E", GPR::E),
+                    ("H", GPR::H),
+                    ("L", GPR::L),
+                ];
+
+                for (name, gpr) in regs {
+                    edit_8!(name, name, self.cpu.get_register(gpr), |v| self
+                        .cpu
+                        .set_register(gpr, v));
+                    let shadow_name = format!("{}'", name);
+                    edit_8!(
+                        shadow_name.clone(),
+                        shadow_name,
+                        self.cpu.get_shadow_register(gpr),
+                        |v| self.cpu.set_shadow_register(gpr, v)
+                    );
+                    ui.end_row();
+                }
+
+                ui.separator();
+                ui.separator();
+                ui.separator();
+                ui.separator();
+                ui.end_row();
+
+                let mono = |text: String| egui::RichText::new(text).monospace();
+                ui.label("IFF1");
+                ui.label(mono(format!("{}", self.cpu.get_iff1())));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+                ui.label("IFF2");
+                ui.label(mono(format!("{}", self.cpu.get_iff2())));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+                ui.label("IM");
+                ui.label(mono(format!("{}", self.cpu.get_interrupt_mode())));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+            });
+
+        ui.add_space(20.0);
+        ui.heading("Flags");
+        ui.separator();
+
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            for (flag, label) in [
+                (Flag::S, "S"),
+                (Flag::Z, "Z"),
+                (Flag::Y, "Y"),
+                (Flag::H, "H"),
+                (Flag::X, "X"),
+                (Flag::PV, "PV"),
+                (Flag::N, "N"),
+                (Flag::C, "C"),
+            ] {
+                let on = self.cpu.get_flag(flag);
+                let color = if on {
+                    egui::Color32::from_rgb(0, 255, 0)
+                } else {
+                    egui::Color32::from_rgb(60, 60, 60)
+                };
+                let text_color = if on {
+                    egui::Color32::BLACK
+                } else {
+                    egui::Color32::WHITE
+                };
+
+                let text = egui::RichText::new(label).strong().color(text_color);
+                let frame_resp = egui::Frame::new()
+                    .fill(color)
+                    .corner_radius(4.0)
+                    .inner_margin(4.0)
+                    .show(ui, |ui| {
+                        ui.label(text);
+                    });
+
+                let interact_resp = ui.interact(
+                    frame_resp.response.rect,
+                    ui.id().with(label),
+                    egui::Sense::click(),
+                );
+
+                if can_edit {
+                    if interact_resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if interact_resp.clicked() {
+                        self.cpu.set_flag(!on, flag);
+                    }
+                }
+            }
+        });
+    }
+
     fn add_recent_file(&mut self, path: PathBuf) {
         // Remove if exists to move it to the top
         println!("Adding recent file: {:?}", path);
@@ -860,6 +1054,7 @@ impl Default for Z80App {
             symbol_table: HashMap::new(),
             address_to_line: HashMap::new(),
             line_to_address: HashMap::new(),
+            assembly_lines: HashMap::new(),
             symbol_display_prefs: HashMap::new(),
             is_running: false,
             pending_modal: None,
@@ -1191,195 +1386,7 @@ impl eframe::App for Z80App {
         egui::Panel::right("right_panel")
             .resizable(true)
             .default_size(280.0)
-            .show(ui, |ui| {
-                ui.heading("Registers");
-                ui.separator();
-
-                let can_edit = !self.is_running || self.cpu.is_halted();
-
-                egui::Grid::new("regs_grid")
-                    .striped(true)
-                    .spacing([10.0, 8.0])
-                    .show(ui, |ui| {
-                        macro_rules! edit_16 {
-                            ($name:expr, $getter:expr, $setter:expr) => {
-                                ui.label($name);
-                                let val = $getter;
-                                let id = egui::Id::new($name);
-                                let mut s = ui.data_mut(|d| {
-                                    d.get_temp_mut_or_insert_with(id, || format!("{:04X}", val))
-                                        .clone()
-                                });
-                                let resp = ui.add_enabled(
-                                    can_edit,
-                                    egui::TextEdit::singleline(&mut s)
-                                        .desired_width(45.0)
-                                        .font(egui::TextStyle::Monospace),
-                                );
-                                if resp.changed() {
-                                    if let Ok(v) = u16::from_str_radix(s.trim(), 16) {
-                                        $setter(v);
-                                    }
-                                    ui.data_mut(|d| d.insert_temp(id, s));
-                                } else if !resp.has_focus() {
-                                    ui.data_mut(|d| d.insert_temp(id, format!("{:04X}", val)));
-                                }
-                            };
-                        }
-
-                        macro_rules! edit_8 {
-                            ($name:expr, $id:expr, $getter:expr, $setter:expr) => {
-                                ui.label($name);
-                                let val = $getter;
-                                let id = egui::Id::new($id);
-                                let mut s = ui.data_mut(|d| {
-                                    d.get_temp_mut_or_insert_with(id, || format!("{:02X}", val))
-                                        .clone()
-                                });
-                                let resp = ui.add_enabled(
-                                    can_edit,
-                                    egui::TextEdit::singleline(&mut s)
-                                        .desired_width(25.0)
-                                        .font(egui::TextStyle::Monospace),
-                                );
-                                if resp.changed() {
-                                    if let Ok(v) = u8::from_str_radix(s.trim(), 16) {
-                                        $setter(v);
-                                    }
-                                    ui.data_mut(|d| d.insert_temp(id, s));
-                                } else if !resp.has_focus() {
-                                    ui.data_mut(|d| d.insert_temp(id, format!("{:02X}", val)));
-                                }
-                            };
-                        }
-
-                        edit_16!("PC", self.cpu.get_pc(), |v| self.cpu.set_pc(v));
-                        ui.label("");
-                        ui.label("");
-                        ui.end_row();
-                        edit_16!("SP", self.cpu.get_sp(), |v| self.cpu.set_sp(v));
-                        ui.label("");
-                        ui.label("");
-                        ui.end_row();
-                        edit_16!("IX", self.cpu.get_ix(), |v| self.cpu.set_ix(v));
-                        ui.label("");
-                        ui.label("");
-                        ui.end_row();
-                        edit_16!("IY", self.cpu.get_iy(), |v| self.cpu.set_iy(v));
-                        ui.label("");
-                        ui.label("");
-                        ui.end_row();
-
-                        ui.separator();
-                        ui.separator();
-                        ui.separator();
-                        ui.separator();
-                        ui.end_row();
-
-                        let regs = [
-                            ("A", GPR::A),
-                            ("F", GPR::F),
-                            ("B", GPR::B),
-                            ("C", GPR::C),
-                            ("D", GPR::D),
-                            ("E", GPR::E),
-                            ("H", GPR::H),
-                            ("L", GPR::L),
-                        ];
-
-                        for (name, gpr) in regs {
-                            edit_8!(name, name, self.cpu.get_register(gpr), |v| self
-                                .cpu
-                                .set_register(gpr, v));
-                            let shadow_name = format!("{}'", name);
-                            edit_8!(
-                                shadow_name.clone(),
-                                shadow_name,
-                                self.cpu.get_shadow_register(gpr),
-                                |v| self.cpu.set_shadow_register(gpr, v)
-                            );
-                            ui.end_row();
-                        }
-
-                        ui.separator();
-                        ui.separator();
-                        ui.separator();
-                        ui.separator();
-                        ui.end_row();
-
-                        let mono = |text: String| egui::RichText::new(text).monospace();
-                        ui.label("IFF1");
-                        ui.label(mono(format!("{}", self.cpu.get_iff1())));
-                        ui.label("");
-                        ui.label("");
-                        ui.end_row();
-                        ui.label("IFF2");
-                        ui.label(mono(format!("{}", self.cpu.get_iff2())));
-                        ui.label("");
-                        ui.label("");
-                        ui.end_row();
-                        ui.label("IM");
-                        ui.label(mono(format!("{}", self.cpu.get_interrupt_mode())));
-                        ui.label("");
-                        ui.label("");
-                        ui.end_row();
-                    });
-
-                ui.add_space(20.0);
-                ui.heading("Flags");
-                ui.separator();
-
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 10.0;
-                    for (flag, label) in [
-                        (Flag::S, "S"),
-                        (Flag::Z, "Z"),
-                        (Flag::Y, "Y"),
-                        (Flag::H, "H"),
-                        (Flag::X, "X"),
-                        (Flag::PV, "PV"),
-                        (Flag::N, "N"),
-                        (Flag::C, "C"),
-                    ] {
-                        let on = self.cpu.get_flag(flag);
-                        let color = if on {
-                            egui::Color32::from_rgb(0, 255, 0)
-                        } else {
-                            egui::Color32::from_rgb(60, 60, 60)
-                        };
-                        let text_color = if on {
-                            egui::Color32::BLACK
-                        } else {
-                            egui::Color32::WHITE
-                        };
-
-                        // Drawn as a small badge
-                        let text = egui::RichText::new(label).strong().color(text_color);
-                        let frame_resp = egui::Frame::new()
-                            .fill(color)
-                            .corner_radius(4.0)
-                            .inner_margin(4.0)
-                            .show(ui, |ui| {
-                                ui.label(text);
-                            });
-
-                        let interact_resp = ui.interact(
-                            frame_resp.response.rect,
-                            ui.id().with(label),
-                            egui::Sense::click(),
-                        );
-
-                        if can_edit {
-                            if interact_resp.hovered() {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                            }
-                            if interact_resp.clicked() {
-                                self.cpu.set_flag(!on, flag);
-                            }
-                        }
-                    }
-                });
-            });
+            .show(ui, |ui| self.render_registers_panel(ui));
 
         let mut sorted_symbols: Vec<_> = self.symbol_table.iter().collect();
         sorted_symbols.sort_by_key(|item| item.1.source_order);
@@ -1584,7 +1591,7 @@ impl eframe::App for Z80App {
                                                 _ => 1,
                                             };
                                             let mut bytes = Vec::new();
-                                            let display_len = len.min(8).max(1); // At least 1 byte
+                                            let display_len = len.clamp(1, 8); // At least 1 byte
                                             for i in 0..display_len {
                                                 bytes.push(self.memory.borrow().read(addr.wrapping_add(i as u16)));
                                             }
@@ -1875,27 +1882,13 @@ impl eframe::App for Z80App {
                                 };
 
                                 for i in 1..=num_lines {
-                                    let line_text = lines.get(i - 1).unwrap_or(&"");
-
-                                    // Extract the actual instruction ignoring comments and labels
-                                    let mut clean = line_text.split(';').next().unwrap_or("").trim();
-                                    if let Some(idx) = clean.find(':') {
-                                        clean = clean[idx + 1..].trim();
-                                    }
-                                    let upper = clean.to_uppercase();
-
-                                    // Determine if this line actually emits code
-                                    let emits_code = !clean.is_empty()
-                                        && !upper.starts_with("ORG ") 
-                                        && !upper.starts_with("EQU ") 
-                                        && !upper.contains(" EQU ");
-
                                     let mut addr_str = "    ".to_string();
 
-                                    if emits_code
-                                        && let Some(&addr) = self.line_to_address.get(&i) {
-                                            addr_str = format!("{:04X}", addr);
-                                        }
+                                    if let Some(line) = self.assembly_lines.get(&i)
+                                        && !line.bytes.is_empty()
+                                    {
+                                        addr_str = format!("{:04X}", line.address);
+                                    }
 
                                     let label = egui::Label::new(
                                         egui::RichText::new(addr_str)
@@ -1941,55 +1934,8 @@ impl eframe::App for Z80App {
                                     let mut data_str = "".to_string();
 
                                     if emits_code
-                                        && let Some(&addr) = self.line_to_address.get(&i) {
-
-                                            // 1. Z80 length decoder to fetch the EXACT required bytes 
-                                            let len = if upper.starts_with("DB ") || upper.starts_with("DEFB ") {
-                                                (clean.split(',').count() as u16).min(8) // Cap visualizer to 8 bytes
-                                            } else if upper.starts_with("DW ") || upper.starts_with("DEFW ") {
-                                                (clean.split(',').count() as u16 * 2).min(8)
-                                            } else if upper.starts_with("DS ") || upper.starts_with("DEFS ") {
-                                                0
-                                            } else {
-                                                let mem = self.memory.borrow();
-                                                let b0 = mem.read(addr);
-                                                match b0 {
-                                                    0xCB => 2,
-                                                    0xDD | 0xFD => {
-                                                        let b1 = mem.read(addr.wrapping_add(1));
-                                                        match b1 {
-                                                            0xCB => 4,
-                                                            0x21 | 0x22 | 0x2A | 0x36 => 4,
-                                                            0x34 | 0x35 => 3,
-                                                            0x46 | 0x4E | 0x56 | 0x5E | 0x66 | 0x6E | 0x7E => 3,
-                                                            0x70..=0x75 | 0x77 => 3,
-                                                            0x86 | 0x8E | 0x96 | 0x9E | 0xA6 | 0xAE | 0xB6 | 0xBE => 3,
-                                                            _ => 2,
-                                                        }
-                                                    }
-                                                    0xED => {
-                                                        let b1 = mem.read(addr.wrapping_add(1));
-                                                        match b1 {
-                                                            0x43 | 0x4B | 0x53 | 0x5B | 0x73 | 0x7B => 4,
-                                                            _ => 2,
-                                                        }
-                                                    }
-                                                    0xC2 | 0xC3 | 0xCA | 0xD2 | 0xDA | 0xE2 | 0xEA | 0xF2 | 0xFA | 0xCD | 0xCC | 0xC4 | 0xD4 | 0xDC | 0xE4 | 0xEC | 0xF4 | 0xFC => 3,
-                                                    0x01 | 0x11 | 0x21 | 0x31 | 0x22 | 0x2A | 0x32 | 0x3A => 3,
-                                                    0xC6 | 0xCE | 0xD6 | 0xDE | 0xE6 | 0xEE | 0xF6 | 0xFE => 2,
-                                                    0x06 | 0x0E | 0x16 | 0x1E | 0x26 | 0x2E | 0x3E => 2,
-                                                    0x10 | 0x18 | 0x20 | 0x28 | 0x30 | 0x38 => 2,
-                                                    0xDB | 0xD3 => 2,
-                                                    _ => 1,
-                                                }
-                                            };
-
-                                            // 2. Fetch the bytes
-                                            let mut bytes = Vec::new();
-                                            let mem = self.memory.borrow();
-                                            for offset in 0..len {
-                                                bytes.push(mem.read(addr.wrapping_add(offset)));
-                                            }
+                                        && let Some(line) = self.assembly_lines.get(&i) {
+                                            let bytes = line.bytes.iter().take(8).copied().collect::<Vec<_>>();
 
                                             // 3. String formatting based on text structure 
                                             if !bytes.is_empty() {
@@ -2126,26 +2072,7 @@ impl eframe::App for Z80App {
         });
 
         if let Some(action) = action {
-            match action {
-                HeaderAction::NewFile => self.new_file(frame.storage_mut()),
-                HeaderAction::OpenFileDialog => self.open_file_dialog(frame.storage_mut()),
-                HeaderAction::OpenFile(path) => self.open_file(path, frame.storage_mut()),
-                HeaderAction::SaveFile => self.save_file(self.active_tab, frame.storage_mut()),
-                HeaderAction::SaveFileAs => self.save_file_as(frame.storage_mut()),
-                HeaderAction::AssembleBinary => self.assemble_binary_to_file(frame.storage_mut()),
-                HeaderAction::LoadBinary => self.load_binary_dialog(frame.storage_mut()),
-                HeaderAction::CloseTab(idx) => {
-                    if self.tabs[idx].is_dirty {
-                        self.pending_modal = Some(ModalType::CloseTab(idx));
-                    } else {
-                        self.close_tab(idx, frame.storage_mut());
-                    }
-                }
-                HeaderAction::Quit => {
-                    // This triggers on_close_event
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            }
+            self.process_header_action(action, &ctx, frame);
         }
 
         // Handle Modal Dialogs

@@ -1,7 +1,7 @@
 use super::PREFIX;
 use crate::cpu::GPR;
 use crate::cpu::{RegisterPair, flags, tests::setup_cpu};
-use crate::traits::SyncronousComponent;
+use crate::traits::SynchronousComponent;
 use rstest::rstest;
 
 const RRD_OPCODE: u8 = 0x67;

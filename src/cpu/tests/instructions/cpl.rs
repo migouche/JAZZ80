@@ -15,7 +15,7 @@ fn test_cpl_instruction(
 ) {
     use crate::{
         cpu::{GPR, tests::setup_cpu},
-        traits::SyncronousComponent,
+        traits::SynchronousComponent,
     };
 
     let mut cpu = setup_cpu();

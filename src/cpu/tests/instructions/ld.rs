@@ -3,7 +3,7 @@ use crate::{
         AddressingMode, GPR, IndexRegister, IndexRegisterPart, RegisterPair, SystemRegister,
         tests::setup_cpu,
     },
-    traits::SyncronousComponent,
+    traits::SynchronousComponent,
 };
 use rstest::rstest;
 
@@ -610,6 +610,38 @@ fn test_ld_indexed_load(
     cpu.tick();
 
     assert_eq!(cpu.get_register(dest_reg), value);
+}
+
+#[rstest]
+#[case::ld_ix_displacement_immediate(0xDD, 0x1000)]
+#[case::ld_iy_displacement_immediate(0xFD, 0x2000)]
+fn test_ld_indexed_immediate_fetch_order(#[case] prefix: u8, #[case] base_addr: u16) {
+    let mut cpu = setup_cpu();
+    let displacement = 0x05_i8;
+    let value = 0xA5;
+
+    cpu.pc = 0;
+    cpu.memory.borrow_mut().write(0, prefix);
+    cpu.memory.borrow_mut().write(1, 0x36); // LD (IX/IY+d), n
+    cpu.memory.borrow_mut().write(2, displacement as u8);
+    cpu.memory.borrow_mut().write(3, value);
+
+    let index_register = if prefix == 0xDD {
+        IndexRegister::IX
+    } else {
+        IndexRegister::IY
+    };
+    cpu.set_index_register(index_register, base_addr);
+
+    cpu.tick();
+
+    assert_eq!(
+        cpu.memory
+            .borrow()
+            .read(base_addr.wrapping_add_signed(displacement as i16)),
+        value
+    );
+    assert_eq!(cpu.get_pc(), 4);
 }
 
 #[rstest]

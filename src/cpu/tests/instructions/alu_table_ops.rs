@@ -3,7 +3,7 @@ use rstest::rstest;
 use crate::cpu::GPR;
 use crate::cpu::RegisterPair;
 use crate::cpu::tests::setup_cpu;
-use crate::cpu::{AddressingMode, SyncronousComponent};
+use crate::cpu::{AddressingMode, SynchronousComponent};
 
 #[rstest]
 // ADD

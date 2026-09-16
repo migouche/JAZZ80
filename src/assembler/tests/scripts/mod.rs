@@ -1,11 +1,11 @@
 use crate::assembler::Symbol;
-use crate::assembler::assemble;
+use crate::assembler::assemble_with_metadata;
 use crate::components::memories::mem_64k::Mem64k;
 use crate::cpu::GPR;
 use crate::cpu::RegisterPair;
 use crate::cpu::Z80A;
 use crate::traits::MemoryMapper;
-use crate::traits::SyncronousComponent;
+use crate::traits::SynchronousComponent;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -17,7 +17,9 @@ fn run_until_halt(
     max_cycles: usize,
 ) -> (Z80A, Rc<RefCell<dyn MemoryMapper>>, HashMap<String, Symbol>) {
     // Assemble
-    let (bytes, symbols, _, _) = assemble(code).expect("Assembly failed");
+    let result = assemble_with_metadata(code).expect("Assembly failed");
+    let bytes = result.bytes;
+    let symbols = result.symbols;
 
     // Setup CPU
     let memory: Rc<RefCell<dyn MemoryMapper>> = Rc::new(RefCell::new(Mem64k::new()));

@@ -3,7 +3,7 @@ use crate::cpu::GPR;
 use crate::cpu::RegisterPair;
 use crate::cpu::tests::setup_cpu;
 use crate::traits::IODevice;
-use crate::traits::SyncronousComponent;
+use crate::traits::SynchronousComponent;
 use rstest::rstest;
 use std::cell::RefCell;
 use std::rc::Rc;

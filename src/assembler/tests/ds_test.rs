@@ -1,4 +1,4 @@
-use crate::assembler::assemble;
+use crate::assembler::assemble_with_metadata;
 
 #[test]
 fn test_ds_basic() {
@@ -7,12 +7,17 @@ fn test_ds_basic() {
             DS 5
             DEFS 2, 0xAA
         ";
-    let (bytes, _, _, _) = assemble(code).unwrap();
+    let bytes = assemble_with_metadata(code).unwrap().bytes;
 
     let total_len = 0x100 + 5 + 2;
     assert_eq!(bytes.len(), total_len);
     assert_eq!(&bytes[0x100..0x100 + 5], &[0, 0, 0, 0, 0]);
     assert_eq!(&bytes[0x100 + 5..], &[0xAA, 0xAA]);
+}
+
+#[test]
+fn test_address_space_overflow_is_an_error() {
+    assert!(assemble_with_metadata("ORG 0xFFFF\nDB 1\nDB 2").is_err());
 }
 
 #[test]
@@ -36,7 +41,7 @@ fn test_block_instructions() {
             OUTD
             OTDR
         ";
-    let (bytes, _, _, _) = assemble(code).unwrap();
+    let bytes = assemble_with_metadata(code).unwrap().bytes;
 
     let expected = vec![
         0xED, 0xA0, // LDI
