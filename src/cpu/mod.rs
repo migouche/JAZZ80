@@ -34,7 +34,6 @@ macro_rules! test_log {
 
 mod decoding;
 
-
 mod flags {
     pub const CARRY: u8 = 0b00000001;
     pub const ADD_SUB: u8 = 0b00000010;
