@@ -83,7 +83,9 @@ fn threaded_delivers_snapshots_while_running() {
 
 #[test]
 fn threaded_nmi_command_wakes_halted_cpu() {
-    let mut machine = machine_with(&[0x76]);
+    // HALT at 0x0000, then `JP $` (infinite loop) so the woken CPU keeps
+    // running instead of re-executing the HALT after wrapping around memory.
+    let mut machine = machine_with(&[0x76, 0xC3, 0x01, 0x00]);
     machine.cpu.memory.write(0x0066, 0xC9);
     let mut runner = Runner::threaded();
     runner.start(machine, HashSet::new());
