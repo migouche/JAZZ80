@@ -185,7 +185,7 @@ fn test_ret(
 ) {
     let mut cpu = setup_cpu();
     for &(addr, val) in stacked_values {
-        cpu.memory.borrow_mut().write(addr, val);
+        cpu.memory.write(addr, val);
     }
     cpu.pc = initial_pc;
     cpu.sp = initial_sp;
@@ -202,7 +202,7 @@ fn test_ret(
         CC::Condition(Condition::P) => RET_P_OPCODE,
         CC::Condition(Condition::M) => RET_M_OPCODE,
     };
-    cpu.memory.borrow_mut().write(cpu.pc, opcode);
+    cpu.memory.write(cpu.pc, opcode);
     cpu.tick();
 
     assert_eq!(
@@ -409,17 +409,13 @@ fn test_call(
     };
 
     // Write Opcode
-    cpu.memory.borrow_mut().write(cpu.pc, opcode);
+    cpu.memory.write(cpu.pc, opcode);
 
     // Write Target Address (Little Endian)
     let low_byte = (target_addr & 0xFF) as u8;
     let high_byte = ((target_addr >> 8) & 0xFF) as u8;
-    cpu.memory
-        .borrow_mut()
-        .write(cpu.pc.wrapping_add(1), low_byte);
-    cpu.memory
-        .borrow_mut()
-        .write(cpu.pc.wrapping_add(2), high_byte);
+    cpu.memory.write(cpu.pc.wrapping_add(1), low_byte);
+    cpu.memory.write(cpu.pc.wrapping_add(2), high_byte);
 
     cpu.tick();
 
@@ -443,8 +439,8 @@ fn test_call(
 
         // In Little Endian, the value at SP should be Low, and SP+1 should be High
         // (Because we Pushed High first to SP-1, then Low to SP-2)
-        let stack_low = cpu.memory.borrow().read(cpu.sp);
-        let stack_high = cpu.memory.borrow().read(cpu.sp.wrapping_add(1));
+        let stack_low = cpu.memory.read(cpu.sp);
+        let stack_high = cpu.memory.read(cpu.sp.wrapping_add(1));
 
         assert_eq!(stack_low, ret_low, "Stack Low Byte (Return Addr) mismatch");
         assert_eq!(
@@ -502,7 +498,7 @@ fn test_rst(
     cpu.pc = starting_pc;
     cpu.sp = starting_sp;
 
-    cpu.memory.borrow_mut().write(cpu.pc, opcode);
+    cpu.memory.write(cpu.pc, opcode);
 
     cpu.tick();
 
@@ -519,7 +515,7 @@ fn test_rst(
     );
 
     let ret_addr = starting_pc.wrapping_add(1);
-    let stack = cpu.memory.borrow().read_word(cpu.sp);
+    let stack = cpu.memory.read_word(cpu.sp);
 
     assert_eq!(stack, ret_addr, "Stack Word (Return Addr) mismatch");
 }

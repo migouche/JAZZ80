@@ -1,7 +1,7 @@
 use crate::traits::IODevice;
 use eframe::egui;
 
-pub trait DeviceWithUi: IODevice {
+pub trait DeviceWithUi: IODevice + Send {
     fn draw(&mut self, ctx: &egui::Context);
     fn get_name(&self) -> String;
     fn get_window_open_state(&self) -> bool;

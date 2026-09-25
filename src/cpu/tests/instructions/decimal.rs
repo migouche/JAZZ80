@@ -93,7 +93,7 @@ fn test_daa_instruction(
 
     let mut cpu = setup_cpu();
     cpu.pc = 0x1000;
-    cpu.memory.borrow_mut().write(cpu.pc, DAA_OPCODE);
+    cpu.memory.write(cpu.pc, DAA_OPCODE);
 
     // Setup initial state
     cpu.set_register(GPR::A, initial_a);

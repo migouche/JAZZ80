@@ -1346,9 +1346,7 @@ fn test_opcode(
 ) {
     let mut cpu = setup_cpu();
     for (i, &byte) in memory_contents.iter().enumerate() {
-        cpu.memory
-            .borrow_mut()
-            .write(starting_pc.wrapping_add(i as u16), byte);
+        cpu.memory.write(starting_pc.wrapping_add(i as u16), byte);
     }
     cpu.pc = starting_pc;
     cpu.tick();

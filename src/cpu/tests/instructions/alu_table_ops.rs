@@ -758,19 +758,19 @@ fn test_alu_op(
 
     match initial_b_src {
         AddressingMode::Immediate(_) => {
-            cpu.memory.borrow_mut().write(pc + 1, initial_b_val);
+            cpu.memory.write(pc + 1, initial_b_val);
         }
         AddressingMode::Register(r) => {
             cpu.set_register(r, initial_b_val);
         }
         AddressingMode::RegisterIndirect(rp) => {
             let addr = cpu.get_register_pair(rp);
-            cpu.memory.borrow_mut().write(addr, initial_b_val);
+            cpu.memory.write(addr, initial_b_val);
         }
         _ => panic!("Unsupported addressing mode in test"),
     }
 
-    cpu.memory.borrow_mut().write(pc, op_code);
+    cpu.memory.write(pc, op_code);
 
     cpu.tick();
 

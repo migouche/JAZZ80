@@ -1,6 +1,7 @@
 mod assembler;
 mod components;
 mod cpu;
+mod emulator;
 mod gui;
 mod traits;
 mod ui_traits;

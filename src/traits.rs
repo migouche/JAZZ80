@@ -2,7 +2,7 @@ pub trait SynchronousComponent {
     fn tick(&mut self);
 }
 
-pub trait MemoryMapper {
+pub trait MemoryMapper: Send {
     fn read(&self, address: u16) -> u8;
     fn write(&mut self, address: u16, data: u8);
 
@@ -18,7 +18,7 @@ pub trait MemoryMapper {
     }
 }
 
-pub trait IODevice {
+pub trait IODevice: Send {
     fn read_in(&mut self, port: u16) -> Option<u8>;
     fn write_out(&mut self, port: u16, data: u8) -> bool;
 

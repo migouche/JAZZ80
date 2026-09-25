@@ -179,7 +179,7 @@ pub(super) fn decode_ed(cpu: &mut Z80A, opcode: u8) {
                     let a = cpu.get_register(GPR::A);
                     let al = a & 0x0F;
                     let hl_addr = cpu.get_register_pair(RegisterPair::HL);
-                    let value = cpu.memory.borrow().read(hl_addr);
+                    let value = cpu.memory.read(hl_addr);
                     let mh = value & 0xF0;
                     let ml = value & 0x0F;
                     let (new_a, new_hl) = if y == 4 {
@@ -193,7 +193,7 @@ pub(super) fn decode_ed(cpu: &mut Z80A, opcode: u8) {
                     let x = (new_a & flags::X) != 0;
                     let y_flag = (new_a & flags::Y) != 0;
                     cpu.set_register(GPR::A, new_a);
-                    cpu.memory.borrow_mut().write(hl_addr, new_hl);
+                    cpu.memory.write(hl_addr, new_hl);
                     cpu.set_flag(s, Flag::S);
                     cpu.set_flag(z, Flag::Z);
                     cpu.set_flag(parity, Flag::PV);
@@ -541,17 +541,15 @@ pub(super) fn decode_unprefixed(cpu: &mut Z80A, opcode: u8, addressing: PrefixAd
                 }
                 4 => {
                     test_log!(cpu, "EX (SP), HL/IX/IY");
-                    let temp_l = cpu.memory.borrow().read(cpu.sp);
-                    let temp_h = cpu.memory.borrow().read(cpu.sp.wrapping_add(1));
+                    let temp_l = cpu.memory.read(cpu.sp);
+                    let temp_h = cpu.memory.read(cpu.sp.wrapping_add(1));
                     let register_pair = cpu.transform_register(
                         AddressingMode::RegisterPair(RegisterPair::HL),
                         addressing,
                     );
                     let rp = cpu.read_16(register_pair);
-                    cpu.memory.borrow_mut().write(cpu.sp, rp as u8);
-                    cpu.memory
-                        .borrow_mut()
-                        .write(cpu.sp.wrapping_add(1), (rp >> 8) as u8);
+                    cpu.memory.write(cpu.sp, rp as u8);
+                    cpu.memory.write(cpu.sp.wrapping_add(1), (rp >> 8) as u8);
                     cpu.write_16(register_pair, ((temp_h as u16) << 8) | temp_l as u16);
                 }
                 5 => {

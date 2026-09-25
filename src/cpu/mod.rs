@@ -7,7 +7,7 @@ mod block_instructions;
 #[cfg(test)]
 use std::collections::VecDeque;
 
-use std::{cell::RefCell, rc::Rc};
+use std::sync::{Arc, Mutex};
 
 use crate::{
     cpu::alu::{
@@ -503,8 +503,8 @@ pub struct Z80A {
     i: u8,
     r: u8,
 
-    pub(super) memory: Rc<RefCell<dyn MemoryMapper>>,
-    devices: Vec<Rc<RefCell<dyn IODevice>>>,
+    pub(super) memory: Box<dyn MemoryMapper>,
+    devices: Vec<Arc<Mutex<dyn IODevice>>>,
 
     pub(super) halted: bool,
     pub(super) iff1: bool,
@@ -518,7 +518,7 @@ pub struct Z80A {
     #[cfg(test)]
     test_callback: (
         VecDeque<String>,
-        Box<dyn FnMut(&str, &mut VecDeque<String>)>,
+        Box<dyn FnMut(&str, &mut VecDeque<String>) + Send>,
     ),
 }
 
@@ -575,7 +575,7 @@ impl Z80A {
         self.halted = halted;
     }
 
-    pub fn new(memory: Rc<RefCell<dyn MemoryMapper>>) -> Self {
+    pub fn new(memory: impl MemoryMapper + 'static) -> Self {
         Z80A {
             af_registers: [AFSet::default(); 2],
             active_af: 0,
@@ -587,7 +587,7 @@ impl Z80A {
             iy: 0,
             i: 0,
             r: 0,
-            memory,
+            memory: Box::new(memory),
             devices: Vec::new(),
             halted: false,
             iff1: false,
@@ -606,7 +606,7 @@ impl Z80A {
         }
     }
 
-    pub fn attach_device(&mut self, device: Rc<RefCell<dyn IODevice>>) {
+    pub fn attach_device(&mut self, device: Arc<Mutex<dyn IODevice>>) {
         self.devices.push(device);
     }
 
@@ -620,7 +620,7 @@ impl Z80A {
 
     fn read_io(&mut self, port: u16) -> u8 {
         for dev in &self.devices {
-            if let Some(val) = dev.borrow_mut().read_in(port) {
+            if let Some(val) = dev.lock().unwrap().read_in(port) {
                 return val;
             }
         }
@@ -629,7 +629,7 @@ impl Z80A {
 
     fn write_io(&mut self, port: u16, data: u8) {
         for dev in &self.devices {
-            if dev.borrow_mut().write_out(port, data) {
+            if dev.lock().unwrap().write_out(port, data) {
                 return;
             }
         }
@@ -640,7 +640,7 @@ impl Z80A {
             return true;
         }
         for dev in &self.devices {
-            if dev.borrow().poll_interrupt() {
+            if dev.lock().unwrap().poll_interrupt() {
                 return true;
             }
         }
@@ -649,8 +649,8 @@ impl Z80A {
 
     fn ack_interrupt(&mut self) -> u8 {
         for dev in &self.devices {
-            if dev.borrow().poll_interrupt() {
-                return dev.borrow_mut().ack_interrupt();
+            if dev.lock().unwrap().poll_interrupt() {
+                return dev.lock().unwrap().ack_interrupt();
             }
         }
         0xFF
@@ -681,7 +681,7 @@ impl Z80A {
                 let vector = self.ack_interrupt() & 0xFE;
                 let addr = ((self.i as u16) << 8) | (vector as u16);
                 self.push(self.pc);
-                let dest = self.memory.borrow().read_word(addr);
+                let dest = self.memory.read_word(addr);
                 self.pc = dest;
             }
             _ => unreachable!(),
@@ -689,7 +689,7 @@ impl Z80A {
     }
 
     fn fetch(&mut self) -> u8 {
-        let data = self.memory.borrow().read(self.pc);
+        let data = self.memory.read(self.pc);
         self.pc = self.pc.wrapping_add(1);
         data
     }
@@ -878,15 +878,15 @@ impl Z80A {
             AddressingMode::Register(r) => self.get_register(r),
             AddressingMode::RegisterIndirect(rp) => {
                 let addr = self.get_register_pair(rp);
-                self.memory.borrow().read(addr)
+                self.memory.read(addr)
             }
             AddressingMode::Indexed(idx, disp) => {
                 let base = self.get_index_register(idx);
                 let addr = base.wrapping_add_signed(disp as i16);
-                self.memory.borrow().read(addr)
+                self.memory.read(addr)
             }
             AddressingMode::Immediate(n) => n,
-            AddressingMode::Absolute(addr) => self.memory.borrow().read(addr),
+            AddressingMode::Absolute(addr) => self.memory.read(addr),
             AddressingMode::System(r) => (self.get_system_register(r) & 0xFF) as u8,
             AddressingMode::IndexRegisterPart(r) => self.get_index_register_part(r),
             _ => panic!("Invalid addressing mode for read_8."),
@@ -898,14 +898,14 @@ impl Z80A {
             AddressingMode::Register(r) => self.set_register(r, value),
             AddressingMode::RegisterIndirect(rp) => {
                 let addr = self.get_register_pair(rp);
-                self.memory.borrow_mut().write(addr, value);
+                self.memory.write(addr, value);
             }
             AddressingMode::Indexed(idx, disp) => {
                 let base = self.get_index_register(idx);
                 let addr = base.wrapping_add_signed(disp as i16);
-                self.memory.borrow_mut().write(addr, value);
+                self.memory.write(addr, value);
             }
-            AddressingMode::Absolute(addr) => self.memory.borrow_mut().write(addr, value),
+            AddressingMode::Absolute(addr) => self.memory.write(addr, value),
             AddressingMode::System(r) => self.set_system_register(r, value as u16),
             AddressingMode::IndexRegisterPart(r) => self.set_index_register_part(r, value),
             _ => panic!("Invalid addressing mode for write_8."),
@@ -918,7 +918,7 @@ impl Z80A {
             AddressingMode::IndexRegister(idx) => self.get_index_register(idx),
             AddressingMode::System(r) => self.get_system_register(r),
             AddressingMode::ImmediateExtended(nn) => nn,
-            AddressingMode::Absolute(addr) => self.memory.borrow().read_word(addr),
+            AddressingMode::Absolute(addr) => self.memory.read_word(addr),
             _ => panic!("Invalid addressing mode for read_16."),
         }
     }
@@ -928,7 +928,7 @@ impl Z80A {
             AddressingMode::RegisterPair(rp) => self.set_register_pair(rp, value),
             AddressingMode::IndexRegister(idx) => self.set_index_register(idx, value),
             AddressingMode::System(r) => self.set_system_register(r, value),
-            AddressingMode::Absolute(addr) => self.memory.borrow_mut().write_word(addr, value),
+            AddressingMode::Absolute(addr) => self.memory.write_word(addr, value),
             _ => panic!("Invalid addressing mode for write_16."),
         }
     }
@@ -949,11 +949,11 @@ impl Z80A {
 
     fn push(&mut self, value: u16) {
         self.sp = self.sp.wrapping_sub(2);
-        self.memory.borrow_mut().write_word(self.sp, value);
+        self.memory.write_word(self.sp, value);
     }
 
     fn pop(&mut self) -> u16 {
-        let value = self.memory.borrow().read_word(self.sp);
+        let value = self.memory.read_word(self.sp);
         self.sp = self.sp.wrapping_add(2);
         value
     }
@@ -1548,7 +1548,7 @@ impl Z80A {
     fn poll_nmi(&mut self) {
         let mut nmi_active = false;
         for dev in &self.devices {
-            if dev.borrow().poll_nmi() {
+            if dev.lock().unwrap().poll_nmi() {
                 nmi_active = true;
                 break;
             }

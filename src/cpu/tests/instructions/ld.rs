@@ -126,7 +126,7 @@ fn test_register_pair_indirect_register(
         AddressingMode::RegisterIndirect(pair),
         AddressingMode::Register(src),
     );
-    assert_eq!(cpu.memory.borrow().read(addr), value);
+    assert_eq!(cpu.memory.read(addr), value);
 }
 
 #[rstest]
@@ -147,7 +147,7 @@ fn test_register_register_pair_indirect(
     #[case] value: u8,
 ) {
     let mut cpu = setup_cpu();
-    cpu.memory.borrow_mut().write(addr, value);
+    cpu.memory.write(addr, value);
     cpu.set_register_pair(pair, addr);
     cpu.ld(
         AddressingMode::Register(src),
@@ -170,7 +170,7 @@ fn test_register_pair_indirect_immediate(
         AddressingMode::RegisterIndirect(pair),
         AddressingMode::Immediate(value),
     );
-    assert_eq!(cpu.memory.borrow().read(addr), value);
+    assert_eq!(cpu.memory.read(addr), value);
 }
 
 #[rstest]
@@ -178,7 +178,7 @@ fn test_register_pair_indirect_immediate(
 #[case::ld_a_nn(GPR::A, 0x1234, 0x7F)] // ld A, (nn)
 fn test_register_absolute(#[case] dest: GPR, #[case] addr: u16, #[case] value: u8) {
     let mut cpu = setup_cpu();
-    cpu.memory.borrow_mut().write(addr, value);
+    cpu.memory.write(addr, value);
     cpu.ld(
         AddressingMode::Register(dest),
         AddressingMode::Absolute(addr),
@@ -196,7 +196,7 @@ fn test_register_absolute(#[case] dest: GPR, #[case] addr: u16, #[case] value: u
 #[case::ld_sp_nn(RegisterPair::SP, 0xDEF0, 0x78)] // ld SP, (nn)
 fn test_register_pair_absolute(#[case] pair: RegisterPair, #[case] addr: u16, #[case] value: u8) {
     let mut cpu = setup_cpu();
-    cpu.memory.borrow_mut().write(addr, value);
+    cpu.memory.write(addr, value);
     cpu.ld_16(
         AddressingMode::RegisterPair(pair),
         AddressingMode::Absolute(addr),
@@ -214,7 +214,7 @@ fn test_absolute_register(#[case] addr: u16, #[case] value: u8) {
         AddressingMode::Absolute(addr),
         AddressingMode::Register(GPR::A),
     );
-    assert_eq!(cpu.memory.borrow().read(addr), value);
+    assert_eq!(cpu.memory.read(addr), value);
 }
 
 #[rstest]
@@ -232,7 +232,7 @@ fn test_absolute_register_pair(#[case] addr: u16, #[case] value: u16) {
         AddressingMode::Absolute(addr),
         AddressingMode::RegisterPair(RegisterPair::BC),
     );
-    assert_eq!(cpu.memory.borrow().read_word(addr), value);
+    assert_eq!(cpu.memory.read_word(addr), value);
 }
 
 #[rstest]
@@ -307,7 +307,7 @@ fn test_indexed_immediate(#[case] base: IndexRegister, #[case] addr: u16, #[case
         AddressingMode::Indexed(base, 0),
         AddressingMode::Immediate(value),
     );
-    assert_eq!(cpu.memory.borrow().read(addr), value);
+    assert_eq!(cpu.memory.read(addr), value);
 }
 
 #[rstest]
@@ -358,7 +358,6 @@ fn test_register_indexed(
 ) {
     let mut cpu = setup_cpu();
     cpu.memory
-        .borrow_mut()
         .write(addr.wrapping_add_signed(displacement as i16), value);
     cpu.set_index_register(base, addr);
     cpu.ld(
@@ -438,9 +437,7 @@ fn test_ld_gpr(
         cpu.set_register(*reg, *val);
     }
     for (i, byte) in memory_bytes.iter().enumerate() {
-        cpu.memory
-            .borrow_mut()
-            .write(initial_pc.wrapping_add(i as u16), *byte);
+        cpu.memory.write(initial_pc.wrapping_add(i as u16), *byte);
     }
 
     cpu.tick();
@@ -474,8 +471,8 @@ fn test_ld_immediate(
 ) {
     let mut cpu = setup_cpu();
     cpu.pc = initial_pc;
-    cpu.memory.borrow_mut().write(initial_pc, opcode);
-    cpu.memory.borrow_mut().write(initial_pc + 1, value);
+    cpu.memory.write(initial_pc, opcode);
+    cpu.memory.write(initial_pc + 1, value);
 
     cpu.tick();
 
@@ -499,9 +496,9 @@ fn test_ld_indirect_hl(
 ) {
     let mut cpu = setup_cpu();
     cpu.pc = initial_pc;
-    cpu.memory.borrow_mut().write(initial_pc, opcode);
+    cpu.memory.write(initial_pc, opcode);
     cpu.set_register_pair(RegisterPair::HL, addr);
-    cpu.memory.borrow_mut().write(addr, value);
+    cpu.memory.write(addr, value);
 
     cpu.tick();
 
@@ -525,13 +522,13 @@ fn test_ld_store_hl(
 ) {
     let mut cpu = setup_cpu();
     cpu.pc = initial_pc;
-    cpu.memory.borrow_mut().write(initial_pc, opcode);
+    cpu.memory.write(initial_pc, opcode);
     cpu.set_register(src_reg, value);
     cpu.set_register_pair(RegisterPair::HL, addr);
 
     cpu.tick();
 
-    assert_eq!(cpu.memory.borrow().read(addr), value);
+    assert_eq!(cpu.memory.read(addr), value);
 }
 
 #[rstest]
@@ -544,13 +541,13 @@ fn test_ld_store_immediate_hl(
 ) {
     let mut cpu = setup_cpu();
     cpu.pc = initial_pc;
-    cpu.memory.borrow_mut().write(initial_pc, opcode);
-    cpu.memory.borrow_mut().write(initial_pc + 1, value);
+    cpu.memory.write(initial_pc, opcode);
+    cpu.memory.write(initial_pc + 1, value);
     cpu.set_register_pair(RegisterPair::HL, addr);
 
     cpu.tick();
 
-    assert_eq!(cpu.memory.borrow().read(addr), value);
+    assert_eq!(cpu.memory.read(addr), value);
 }
 
 #[rstest]
@@ -565,14 +562,10 @@ fn test_ld_index_immediate_extended(
 ) {
     let mut cpu = setup_cpu();
     cpu.pc = initial_pc;
-    cpu.memory.borrow_mut().write(initial_pc, prefix);
-    cpu.memory.borrow_mut().write(initial_pc + 1, opcode);
-    cpu.memory
-        .borrow_mut()
-        .write(initial_pc + 2, (value & 0xFF) as u8);
-    cpu.memory
-        .borrow_mut()
-        .write(initial_pc + 3, (value >> 8) as u8);
+    cpu.memory.write(initial_pc, prefix);
+    cpu.memory.write(initial_pc + 1, opcode);
+    cpu.memory.write(initial_pc + 2, (value & 0xFF) as u8);
+    cpu.memory.write(initial_pc + 3, (value >> 8) as u8);
 
     cpu.tick();
 
@@ -594,12 +587,12 @@ fn test_ld_indexed_load(
 ) {
     let mut cpu = setup_cpu();
     cpu.pc = initial_pc;
-    cpu.memory.borrow_mut().write(initial_pc, prefix);
-    cpu.memory.borrow_mut().write(initial_pc + 1, opcode);
-    cpu.memory.borrow_mut().write(initial_pc + 2, offset as u8);
+    cpu.memory.write(initial_pc, prefix);
+    cpu.memory.write(initial_pc + 1, opcode);
+    cpu.memory.write(initial_pc + 2, offset as u8);
 
     let target_addr = base_addr.wrapping_add_signed(offset as i16);
-    cpu.memory.borrow_mut().write(target_addr, value);
+    cpu.memory.write(target_addr, value);
 
     if prefix == 0xDD {
         cpu.set_index_register(IndexRegister::IX, base_addr);
@@ -621,10 +614,10 @@ fn test_ld_indexed_immediate_fetch_order(#[case] prefix: u8, #[case] base_addr: 
     let value = 0xA5;
 
     cpu.pc = 0;
-    cpu.memory.borrow_mut().write(0, prefix);
-    cpu.memory.borrow_mut().write(1, 0x36); // LD (IX/IY+d), n
-    cpu.memory.borrow_mut().write(2, displacement as u8);
-    cpu.memory.borrow_mut().write(3, value);
+    cpu.memory.write(0, prefix);
+    cpu.memory.write(1, 0x36); // LD (IX/IY+d), n
+    cpu.memory.write(2, displacement as u8);
+    cpu.memory.write(3, value);
 
     let index_register = if prefix == 0xDD {
         IndexRegister::IX
@@ -637,7 +630,6 @@ fn test_ld_indexed_immediate_fetch_order(#[case] prefix: u8, #[case] base_addr: 
 
     assert_eq!(
         cpu.memory
-            .borrow()
             .read(base_addr.wrapping_add_signed(displacement as i16)),
         value
     );
@@ -655,13 +647,13 @@ fn test_ld_a_indirect_pair(
 ) {
     let mut cpu = setup_cpu();
     cpu.pc = initial_pc;
-    cpu.memory.borrow_mut().write(initial_pc, opcode);
+    cpu.memory.write(initial_pc, opcode);
     if opcode == 0x0A {
         cpu.set_register_pair(RegisterPair::BC, addr);
     } else {
         cpu.set_register_pair(RegisterPair::DE, addr);
     }
-    cpu.memory.borrow_mut().write(addr, value);
+    cpu.memory.write(addr, value);
 
     cpu.tick();
 
@@ -679,7 +671,7 @@ fn test_ld_indirect_pair_a(
 ) {
     let mut cpu = setup_cpu();
     cpu.pc = initial_pc;
-    cpu.memory.borrow_mut().write(initial_pc, opcode);
+    cpu.memory.write(initial_pc, opcode);
     cpu.set_register(GPR::A, value);
     if opcode == 0x02 {
         cpu.set_register_pair(RegisterPair::BC, addr);
@@ -689,7 +681,7 @@ fn test_ld_indirect_pair_a(
 
     cpu.tick();
 
-    assert_eq!(cpu.memory.borrow().read(addr), value);
+    assert_eq!(cpu.memory.read(addr), value);
 }
 
 #[rstest]
@@ -702,14 +694,10 @@ fn test_ld_a_absolute(
 ) {
     let mut cpu = setup_cpu();
     cpu.pc = initial_pc;
-    cpu.memory.borrow_mut().write(initial_pc, opcode);
-    cpu.memory
-        .borrow_mut()
-        .write(initial_pc + 1, (addr & 0xFF) as u8);
-    cpu.memory
-        .borrow_mut()
-        .write(initial_pc + 2, (addr >> 8) as u8);
-    cpu.memory.borrow_mut().write(addr, value);
+    cpu.memory.write(initial_pc, opcode);
+    cpu.memory.write(initial_pc + 1, (addr & 0xFF) as u8);
+    cpu.memory.write(initial_pc + 2, (addr >> 8) as u8);
+    cpu.memory.write(addr, value);
 
     cpu.tick();
 
@@ -726,18 +714,14 @@ fn test_ld_absolute_a(
 ) {
     let mut cpu = setup_cpu();
     cpu.pc = initial_pc;
-    cpu.memory.borrow_mut().write(initial_pc, opcode);
-    cpu.memory
-        .borrow_mut()
-        .write(initial_pc + 1, (addr & 0xFF) as u8);
-    cpu.memory
-        .borrow_mut()
-        .write(initial_pc + 2, (addr >> 8) as u8);
+    cpu.memory.write(initial_pc, opcode);
+    cpu.memory.write(initial_pc + 1, (addr & 0xFF) as u8);
+    cpu.memory.write(initial_pc + 2, (addr >> 8) as u8);
     cpu.set_register(GPR::A, value);
 
     cpu.tick();
 
-    assert_eq!(cpu.memory.borrow().read(addr), value);
+    assert_eq!(cpu.memory.read(addr), value);
 }
 
 #[rstest]
@@ -754,9 +738,9 @@ fn test_ld_index_parts_immediate(
 ) {
     let mut cpu = setup_cpu();
     cpu.pc = initial_pc;
-    cpu.memory.borrow_mut().write(initial_pc, prefix);
-    cpu.memory.borrow_mut().write(initial_pc + 1, opcode);
-    cpu.memory.borrow_mut().write(initial_pc + 2, value);
+    cpu.memory.write(initial_pc, prefix);
+    cpu.memory.write(initial_pc + 1, opcode);
+    cpu.memory.write(initial_pc + 2, value);
 
     cpu.tick();
 
@@ -776,8 +760,8 @@ fn test_ld_from_index_part(
 ) {
     let mut cpu = setup_cpu();
     cpu.pc = initial_pc;
-    cpu.memory.borrow_mut().write(initial_pc, prefix);
-    cpu.memory.borrow_mut().write(initial_pc + 1, opcode);
+    cpu.memory.write(initial_pc, prefix);
+    cpu.memory.write(initial_pc + 1, opcode);
 
     cpu.set_index_register_part(src, value);
 
@@ -799,8 +783,8 @@ fn test_ld_to_index_part(
 ) {
     let mut cpu = setup_cpu();
     cpu.pc = initial_pc;
-    cpu.memory.borrow_mut().write(initial_pc, prefix);
-    cpu.memory.borrow_mut().write(initial_pc + 1, opcode);
+    cpu.memory.write(initial_pc, prefix);
+    cpu.memory.write(initial_pc + 1, opcode);
 
     cpu.set_register(src, value);
 

@@ -11,8 +11,8 @@ impl Z80A {
                 let hl = self.get_register_pair(RegisterPair::HL);
                 let de = self.get_register_pair(RegisterPair::DE);
                 let bc = self.get_register_pair(RegisterPair::BC);
-                let val = self.memory.borrow().read(hl);
-                self.memory.borrow_mut().write(de, val);
+                let val = self.memory.read(hl);
+                self.memory.write(de, val);
 
                 self.set_register_pair(RegisterPair::HL, hl.wrapping_add(1));
                 self.set_register_pair(RegisterPair::DE, de.wrapping_add(1));
@@ -40,8 +40,8 @@ impl Z80A {
                 let hl = self.get_register_pair(RegisterPair::HL);
                 let de = self.get_register_pair(RegisterPair::DE);
                 let bc = self.get_register_pair(RegisterPair::BC);
-                let val = self.memory.borrow().read(hl);
-                self.memory.borrow_mut().write(de, val);
+                let val = self.memory.read(hl);
+                self.memory.write(de, val);
 
                 self.set_register_pair(RegisterPair::HL, hl.wrapping_sub(1));
                 self.set_register_pair(RegisterPair::DE, de.wrapping_sub(1));
@@ -62,7 +62,7 @@ impl Z80A {
                 let a = self.get_register(GPR::A);
                 let hl = self.get_register_pair(RegisterPair::HL);
                 let bc = self.get_register_pair(RegisterPair::BC);
-                let val = self.memory.borrow().read(hl);
+                let val = self.memory.read(hl);
 
                 let res = a.wrapping_sub(val);
 
@@ -90,7 +90,7 @@ impl Z80A {
                 let a = self.get_register(GPR::A);
                 let hl = self.get_register_pair(RegisterPair::HL);
                 let bc = self.get_register_pair(RegisterPair::BC);
-                let val = self.memory.borrow().read(hl);
+                let val = self.memory.read(hl);
 
                 let res = a.wrapping_sub(val);
 
@@ -120,7 +120,7 @@ impl Z80A {
 
                 let port = ((b as u16) << 8) | (c as u16);
                 let val = self.read_io(port);
-                self.memory.borrow_mut().write(hl, val);
+                self.memory.write(hl, val);
 
                 self.set_register_pair(RegisterPair::HL, hl.wrapping_add(1));
                 let next_b = b.wrapping_sub(1);
@@ -142,7 +142,7 @@ impl Z80A {
 
                 let port = ((b as u16) << 8) | (c as u16);
                 let val = self.read_io(port);
-                self.memory.borrow_mut().write(hl, val);
+                self.memory.write(hl, val);
 
                 self.set_register_pair(RegisterPair::HL, hl.wrapping_sub(1));
                 let next_b = b.wrapping_sub(1);
@@ -162,7 +162,7 @@ impl Z80A {
                 let c = self.get_register(GPR::C);
                 let hl = self.get_register_pair(RegisterPair::HL);
 
-                let val = self.memory.borrow().read(hl);
+                let val = self.memory.read(hl);
 
                 let next_b = b.wrapping_sub(1);
                 self.set_register(GPR::B, next_b);
@@ -185,7 +185,7 @@ impl Z80A {
                 let c = self.get_register(GPR::C);
                 let hl = self.get_register_pair(RegisterPair::HL);
 
-                let val = self.memory.borrow().read(hl);
+                let val = self.memory.read(hl);
 
                 let next_b = b.wrapping_sub(1);
                 self.set_register(GPR::B, next_b);

@@ -1,3 +1,4 @@
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn binary_hexdump(bytes: &[u8]) -> String {
     let mut lines = Vec::new();
     for (offset, chunk) in bytes.chunks(16).enumerate() {
@@ -27,5 +28,5 @@ pub(super) fn binary_hexdump(bytes: &[u8]) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;

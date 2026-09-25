@@ -5,8 +5,7 @@ use crate::cpu::tests::setup_cpu;
 use crate::traits::IODevice;
 use crate::traits::SynchronousComponent;
 use rstest::rstest;
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 struct MockIODevice {
     port: u16,
@@ -55,13 +54,13 @@ impl IODevice for MockIODevice {
 #[case(0xFF, 0xAA)]
 fn test_in_a_n(#[case] port: u8, #[case] value: u8) {
     let mut cpu = setup_cpu();
-    let device = Rc::new(RefCell::new(MockIODevice::new(port as u16, vec![value])));
+    let device = Arc::new(Mutex::new(MockIODevice::new(port as u16, vec![value])));
     cpu.attach_device(device.clone());
     cpu.set_register(GPR::A, 0xAA);
 
     // Opcode: DB n (IN A, (n))
-    cpu.memory.borrow_mut().write(0x0000, 0xDB);
-    cpu.memory.borrow_mut().write(0x0001, port);
+    cpu.memory.write(0x0000, 0xDB);
+    cpu.memory.write(0x0001, port);
 
     cpu.tick();
 
@@ -74,18 +73,18 @@ fn test_in_a_n(#[case] port: u8, #[case] value: u8) {
 #[case(0xFF, 0xFF)]
 fn test_out_n_a(#[case] port: u8, #[case] value: u8) {
     let mut cpu = setup_cpu();
-    let device = Rc::new(RefCell::new(MockIODevice::new(port as u16, vec![])));
+    let device = Arc::new(Mutex::new(MockIODevice::new(port as u16, vec![])));
     cpu.attach_device(device.clone());
 
     cpu.set_register(GPR::A, value);
 
     // Opcode: D3 n (OUT (n), A)
-    cpu.memory.borrow_mut().write(0x0000, 0xD3);
-    cpu.memory.borrow_mut().write(0x0001, port);
+    cpu.memory.write(0x0000, 0xD3);
+    cpu.memory.write(0x0001, port);
 
     cpu.tick();
 
-    assert_eq!(device.borrow().output_log[0], value);
+    assert_eq!(device.lock().unwrap().output_log[0], value);
 }
 
 #[rstest]
@@ -103,14 +102,14 @@ fn test_in_r_c(#[case] opcode: u8, #[case] target: GPR) {
     let val = 0x99;
     let port = 0x30;
 
-    let device = Rc::new(RefCell::new(MockIODevice::new(port, vec![val])));
+    let device = Arc::new(Mutex::new(MockIODevice::new(port, vec![val])));
     cpu.attach_device(device.clone());
 
     cpu.set_register(GPR::C, port as u8); // Port low byte
     cpu.set_register(GPR::B, 0x00); // BC high byte
 
-    cpu.memory.borrow_mut().write(0x0000, 0xED);
-    cpu.memory.borrow_mut().write(0x0001, opcode);
+    cpu.memory.write(0x0000, 0xED);
+    cpu.memory.write(0x0001, opcode);
 
     cpu.tick();
 
@@ -141,26 +140,26 @@ fn test_out_c_r(#[case] opcode: u8, #[case] source: GPR) {
     if source == GPR::C {
         // Special case: OUT (C), C -> writes value of C to port C.
         // Let's use port_addr as both value and port.
-        let device = Rc::new(RefCell::new(MockIODevice::new(port_addr, vec![])));
+        let device = Arc::new(Mutex::new(MockIODevice::new(port_addr, vec![])));
         cpu.attach_device(device.clone());
         cpu.set_register(GPR::C, port_addr as u8);
 
-        cpu.memory.borrow_mut().write(0x0000, 0xED);
-        cpu.memory.borrow_mut().write(0x0001, opcode);
+        cpu.memory.write(0x0000, 0xED);
+        cpu.memory.write(0x0001, opcode);
         cpu.tick();
 
-        assert_eq!(device.borrow().output_log[0], port_addr as u8);
+        assert_eq!(device.lock().unwrap().output_log[0], port_addr as u8);
     } else {
-        let device = Rc::new(RefCell::new(MockIODevice::new(port_addr, vec![])));
+        let device = Arc::new(Mutex::new(MockIODevice::new(port_addr, vec![])));
         cpu.attach_device(device.clone());
         cpu.set_register(GPR::C, port_addr as u8);
         cpu.set_register(source, val_to_write);
 
-        cpu.memory.borrow_mut().write(0x0000, 0xED);
-        cpu.memory.borrow_mut().write(0x0001, opcode);
+        cpu.memory.write(0x0000, 0xED);
+        cpu.memory.write(0x0001, opcode);
         cpu.tick();
 
-        assert_eq!(device.borrow().output_log[0], val_to_write);
+        assert_eq!(device.lock().unwrap().output_log[0], val_to_write);
     }
 }
 
@@ -168,17 +167,17 @@ fn test_out_c_r(#[case] opcode: u8, #[case] source: GPR) {
 fn test_out_c_0() {
     // ED 71 -> OUT (C), 0
     let mut cpu = setup_cpu();
-    let device = Rc::new(RefCell::new(MockIODevice::new(0x50, vec![])));
+    let device = Arc::new(Mutex::new(MockIODevice::new(0x50, vec![])));
     cpu.attach_device(device.clone());
 
     cpu.set_register(GPR::C, 0x50);
 
-    cpu.memory.borrow_mut().write(0x0000, 0xED);
-    cpu.memory.borrow_mut().write(0x0001, 0x71);
+    cpu.memory.write(0x0000, 0xED);
+    cpu.memory.write(0x0001, 0x71);
 
     cpu.tick();
 
-    assert_eq!(device.borrow().output_log[0], 0x00);
+    assert_eq!(device.lock().unwrap().output_log[0], 0x00);
 }
 
 #[rstest]
@@ -192,7 +191,7 @@ fn test_block_io_step(#[case] opcode: u8, #[case] is_in: bool, #[case] inc_hl: b
     let port = 0x60;
     let val = 0xAA;
 
-    let device = Rc::new(RefCell::new(MockIODevice::new(port, vec![val])));
+    let device = Arc::new(Mutex::new(MockIODevice::new(port, vec![val])));
     cpu.attach_device(device.clone());
 
     cpu.set_register(GPR::C, port as u8);
@@ -201,19 +200,19 @@ fn test_block_io_step(#[case] opcode: u8, #[case] is_in: bool, #[case] inc_hl: b
 
     if !is_in {
         // Setup memory for OUT
-        cpu.memory.borrow_mut().write(0x1000, val);
+        cpu.memory.write(0x1000, val);
     }
 
-    cpu.memory.borrow_mut().write(0x0000, 0xED);
-    cpu.memory.borrow_mut().write(0x0001, opcode);
+    cpu.memory.write(0x0000, 0xED);
+    cpu.memory.write(0x0001, opcode);
 
     cpu.tick();
 
     // Verify
     if is_in {
-        assert_eq!(cpu.memory.borrow().read(0x1000), val);
+        assert_eq!(cpu.memory.read(0x1000), val);
     } else {
-        assert_eq!(device.borrow().output_log[0], val);
+        assert_eq!(device.lock().unwrap().output_log[0], val);
     }
 
     assert_eq!(cpu.get_register(GPR::B), 0x04);
@@ -230,15 +229,15 @@ fn test_block_io_step(#[case] opcode: u8, #[case] is_in: bool, #[case] inc_hl: b
 #[case::ini_z(0xA2)]
 fn test_block_io_zero_flag(#[case] opcode: u8) {
     let mut cpu = setup_cpu();
-    let device = Rc::new(RefCell::new(MockIODevice::new(0x60, vec![0xBB])));
+    let device = Arc::new(Mutex::new(MockIODevice::new(0x60, vec![0xBB])));
     cpu.attach_device(device.clone());
 
     cpu.set_register(GPR::C, 0x60);
     cpu.set_register(GPR::B, 0x01); // Will decrement to 0
     cpu.set_register_pair(RegisterPair::HL, 0x2000);
 
-    cpu.memory.borrow_mut().write(0x0000, 0xED);
-    cpu.memory.borrow_mut().write(0x0001, opcode);
+    cpu.memory.write(0x0000, 0xED);
+    cpu.memory.write(0x0001, opcode);
 
     cpu.tick();
 
@@ -260,7 +259,7 @@ fn test_block_io_repeat(#[case] opcode: u8, #[case] is_in: bool, #[case] inc_hl:
     // For IN: queue 2 bytes
     // For OUT: we will inspect log
     let device_vals = vec![0x11, 0x22];
-    let device = Rc::new(RefCell::new(MockIODevice::new(port, device_vals.clone())));
+    let device = Arc::new(Mutex::new(MockIODevice::new(port, device_vals.clone())));
     cpu.attach_device(device.clone());
 
     cpu.set_register(GPR::C, port as u8);
@@ -269,16 +268,16 @@ fn test_block_io_repeat(#[case] opcode: u8, #[case] is_in: bool, #[case] inc_hl:
 
     if !is_in {
         // Setup memory for OUT (0x4000, 0x3FFF or 0x4001 depending on inc/dec)
-        cpu.memory.borrow_mut().write(0x4000, 0x11);
+        cpu.memory.write(0x4000, 0x11);
         if inc_hl {
-            cpu.memory.borrow_mut().write(0x4001, 0x22);
+            cpu.memory.write(0x4001, 0x22);
         } else {
-            cpu.memory.borrow_mut().write(0x3FFF, 0x22);
+            cpu.memory.write(0x3FFF, 0x22);
         }
     }
 
-    cpu.memory.borrow_mut().write(0x0000, 0xED);
-    cpu.memory.borrow_mut().write(0x0001, opcode);
+    cpu.memory.write(0x0000, 0xED);
+    cpu.memory.write(0x0001, opcode);
 
     // Iteration 1
     cpu.tick();
@@ -288,9 +287,9 @@ fn test_block_io_repeat(#[case] opcode: u8, #[case] is_in: bool, #[case] inc_hl:
     assert_eq!(cpu.pc, 0x0000, "Should repeat");
 
     if is_in {
-        assert_eq!(cpu.memory.borrow().read(0x4000), 0x11);
+        assert_eq!(cpu.memory.read(0x4000), 0x11);
     } else {
-        assert_eq!(device.borrow().output_log[0], 0x11);
+        assert_eq!(device.lock().unwrap().output_log[0], 0x11);
     }
 
     // Iteration 2
@@ -306,8 +305,8 @@ fn test_block_io_repeat(#[case] opcode: u8, #[case] is_in: bool, #[case] inc_hl:
 
     if is_in {
         let addr2 = if inc_hl { 0x4001 } else { 0x3FFF };
-        assert_eq!(cpu.memory.borrow().read(addr2), 0x22);
+        assert_eq!(cpu.memory.read(addr2), 0x22);
     } else {
-        assert_eq!(device.borrow().output_log[1], 0x22);
+        assert_eq!(device.lock().unwrap().output_log[1], 0x22);
     }
 }

@@ -1,22 +1,23 @@
 use crate::assembler::{AssemblyLine, Symbol, SymbolType, assemble_binary, assemble_with_metadata};
+use crate::cpu::{Flag, GPR};
+use crate::emulator::{Machine, MachineSnapshot};
+use crate::gui::exec::{Command, Event, Runner, StopReason};
+use crate::traits::SynchronousComponent;
 use eframe::egui::{self, TextBuffer};
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::rc::Rc;
-
-use crate::components::memories::mem_64k::Mem64k;
-use crate::cpu::{Flag, GPR, Z80A};
-use crate::traits::{MemoryMapper, SynchronousComponent};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::components::devices::DeviceDefinition;
 use crate::ui_traits::DeviceWithUi;
 
+pub mod exec;
 mod formatting;
 mod highlighting;
 
 #[cfg(target_arch = "wasm32")]
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, channel};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -89,9 +90,13 @@ pub struct EditorTab {
 #[serde(default)]
 pub struct Z80App {
     #[serde(skip)]
-    cpu: Z80A,
+    machine: Option<Machine>,
     #[serde(skip)]
-    memory: Rc<RefCell<dyn MemoryMapper>>,
+    snapshot: MachineSnapshot,
+    #[serde(skip)]
+    runner: Runner,
+    #[serde(skip)]
+    breakpoint_addrs: HashSet<u16>,
 
     tabs: Vec<EditorTab>,
     active_tab: usize,
@@ -113,6 +118,8 @@ pub struct Z80App {
     #[serde(skip)]
     is_running: bool,
     #[serde(skip)]
+    last_stop_reason: Option<StopReason>,
+    #[serde(skip)]
     pending_modal: Option<ModalType>,
     #[serde(skip)]
     loaded_file_name: String,
@@ -120,7 +127,7 @@ pub struct Z80App {
     code_theme: highlighting::CodeTheme,
 
     #[serde(skip)]
-    attached_devices: Vec<Rc<RefCell<dyn DeviceWithUi>>>,
+    attached_devices: Vec<Arc<Mutex<dyn DeviceWithUi>>>,
 
     #[cfg(target_arch = "wasm32")]
     #[serde(skip)]
@@ -146,9 +153,50 @@ pub struct Z80App {
     is_assembly_stale: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 const APP_ID: &str = "jazz80-simulator";
+#[cfg(not(target_arch = "wasm32"))]
 const APP_NAME: &str = "JAZZ80 - Z80 Simulator";
 const STORAGE_KEY: &str = "z80_workspace";
+
+fn reg_value(snapshot: &MachineSnapshot, gpr: GPR) -> u8 {
+    match gpr {
+        GPR::A => snapshot.regs[0],
+        GPR::F => snapshot.regs[1],
+        GPR::B => snapshot.regs[2],
+        GPR::C => snapshot.regs[3],
+        GPR::D => snapshot.regs[4],
+        GPR::E => snapshot.regs[5],
+        GPR::H => snapshot.regs[6],
+        GPR::L => snapshot.regs[7],
+    }
+}
+
+fn shadow_reg_value(snapshot: &MachineSnapshot, gpr: GPR) -> u8 {
+    match gpr {
+        GPR::A => snapshot.shadow_regs[0],
+        GPR::F => snapshot.shadow_regs[1],
+        GPR::B => snapshot.shadow_regs[2],
+        GPR::C => snapshot.shadow_regs[3],
+        GPR::D => snapshot.shadow_regs[4],
+        GPR::E => snapshot.shadow_regs[5],
+        GPR::H => snapshot.shadow_regs[6],
+        GPR::L => snapshot.shadow_regs[7],
+    }
+}
+
+fn snapshot_flag(snapshot: &MachineSnapshot, flag: Flag) -> bool {
+    match flag {
+        Flag::S => snapshot.flags.s,
+        Flag::Z => snapshot.flags.z,
+        Flag::Y => snapshot.flags.y,
+        Flag::H => snapshot.flags.h,
+        Flag::X => snapshot.flags.x,
+        Flag::PV => snapshot.flags.pv,
+        Flag::N => snapshot.flags.n,
+        Flag::C => snapshot.flags.c,
+    }
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run() -> eframe::Result<()> {
@@ -163,12 +211,6 @@ pub fn run() -> eframe::Result<()> {
         options,
         Box::new(|cc| Ok(Box::new(Z80App::new(cc)))),
     )
-}
-
-#[cfg(target_arch = "wasm32")]
-pub fn run() -> eframe::Result<()> {
-    // Placeholder to satisfy main.rs, but main.rs will ignore it on wasm usually
-    Ok(())
 }
 
 impl Z80App {
@@ -248,18 +290,22 @@ START:
     }
 
     fn load_and_reset(&mut self) {
-        // Reset
-        let memory: Rc<RefCell<dyn MemoryMapper>> = Rc::new(RefCell::new(Mem64k::new()));
-        self.memory = memory.clone();
-        self.cpu = Z80A::new(self.memory.clone());
+        self.machine = if self.machine.is_some() {
+            self.machine.take()
+        } else {
+            Some(self.runner.take_machine())
+        };
+        let machine = self.machine.as_mut().unwrap();
         for device in &self.attached_devices {
-            device.borrow_mut().reset();
-            self.cpu.attach_device(device.clone());
+            device.lock().unwrap().reset();
+            machine.cpu.attach_device(device.clone());
         }
 
         self.is_running = false;
+        self.last_stop_reason = None;
 
         if self.tabs.is_empty() {
+            self.refresh_snapshot();
             return;
         }
 
@@ -282,13 +328,15 @@ START:
             self.last_error = None;
 
             if let Some(bytes) = active_tab.binary_bytes.clone() {
-                let mut mem = self.memory.borrow_mut();
+                let mem = machine.memory_mut();
                 for (i, b) in bytes.iter().enumerate() {
                     mem.write(i as u16, *b);
                 }
             } else {
                 self.last_error = Some("Binary tab is missing raw bytes".to_string());
             }
+            self.sync_breakpoints();
+            self.refresh_snapshot();
             return;
         }
 
@@ -325,7 +373,7 @@ START:
             self.last_error = Some(err);
         } else {
             self.last_error = None;
-            let mut mem = self.memory.borrow_mut();
+            let mem = machine.memory_mut();
             let image_addr_set: HashSet<u16> = image.iter().map(|(addr, _)| *addr).collect();
             for (addr, b) in &image {
                 mem.write(*addr, *b);
@@ -335,6 +383,71 @@ START:
                     mem.write(i as u16, *b);
                 }
             }
+        }
+        self.sync_breakpoints();
+        self.refresh_snapshot();
+    }
+
+    fn with_machine<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut Machine) -> R,
+    {
+        let result = if let Some(machine) = self.machine.as_mut() {
+            f(machine)
+        } else {
+            let mut machine = self.runner.take_machine();
+            let result = f(&mut machine);
+            self.machine = Some(machine);
+            self.is_running = false;
+            result
+        };
+        self.refresh_snapshot();
+        result
+    }
+
+    fn refresh_snapshot(&mut self) {
+        if let Some(machine) = self.machine.as_ref() {
+            self.snapshot = machine.snapshot();
+        }
+    }
+
+    fn sync_breakpoints(&mut self) {
+        let mut addrs = HashSet::new();
+        if let Some(tab) = self.tabs.get(self.active_tab) {
+            for &line in &tab.breakpoints {
+                if let Some(&addr) = self.line_to_address.get(&line) {
+                    addrs.insert(addr);
+                }
+            }
+        }
+        let changed = addrs != self.breakpoint_addrs;
+        self.breakpoint_addrs = addrs;
+        if changed && self.is_running {
+            self.runner
+                .send_command(Command::SetBreakpoints(self.breakpoint_addrs.clone()));
+        }
+    }
+
+    fn start_execution(&mut self) {
+        let machine = self.machine.take().unwrap_or_default();
+        self.is_running = true;
+        self.last_stop_reason = None;
+        self.runner.start(machine, self.breakpoint_addrs.clone());
+    }
+
+    fn stop_execution(&mut self) {
+        if self.machine.is_some() {
+            return;
+        }
+        self.machine = Some(self.runner.take_machine());
+        self.is_running = false;
+        self.refresh_snapshot();
+    }
+
+    fn ensure_machine_reclaimed(&mut self) {
+        if self.machine.is_none() && !self.runner.is_running() {
+            self.machine = Some(self.runner.take_machine());
+            self.refresh_snapshot();
         }
     }
 
@@ -371,6 +484,7 @@ START:
         app
     }
 
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     fn open_file_dialog(&mut self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = rfd::FileDialog::new()
@@ -434,6 +548,7 @@ START:
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn open_binary_tab(
         &mut self,
         path: PathBuf,
@@ -532,32 +647,33 @@ START:
             return;
         }
 
-        let is_binary = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "bin" | "rom" | "com"))
-            .unwrap_or(false);
-
         #[cfg(not(target_arch = "wasm32"))]
-        if is_binary {
-            match std::fs::read(&path) {
-                Ok(bytes) => {
-                    self.open_binary_tab(path, bytes, storage);
+        {
+            let is_binary = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "bin" | "rom" | "com"))
+                .unwrap_or(false);
+
+            if is_binary {
+                match std::fs::read(&path) {
+                    Ok(bytes) => {
+                        self.open_binary_tab(path, bytes, storage);
+                    }
+                    Err(err) => {
+                        self.last_error = Some(format!("Failed to open binary file: {}", err));
+                    }
+                }
+                return;
+            }
+
+            match std::fs::read_to_string(&path) {
+                Ok(content) => {
+                    self.load_file_content(path, content, storage);
                 }
                 Err(err) => {
-                    self.last_error = Some(format!("Failed to open binary file: {}", err));
+                    self.last_error = Some(format!("Failed to open file: {}", err));
                 }
-            }
-            return;
-        }
-
-        #[cfg(not(target_arch = "wasm32"))]
-        match std::fs::read_to_string(&path) {
-            Ok(content) => {
-                self.load_file_content(path, content, storage);
-            }
-            Err(err) => {
-                self.last_error = Some(format!("Failed to open file: {}", err));
             }
         }
 
@@ -722,7 +838,10 @@ START:
                     return;
                 }
 
-                self.last_error = Some("Binary export was cancelled".to_string());
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.last_error = Some("Binary export was cancelled".to_string());
+                }
             }
             Err(err) => {
                 self.last_error = Some(format!("Failed to assemble binary: {}", err));
@@ -730,6 +849,7 @@ START:
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn load_binary_file(
         &mut self,
         path: PathBuf,
@@ -752,6 +872,7 @@ START:
         }
     }
 
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     fn load_binary_dialog(&mut self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = rfd::FileDialog::new()
@@ -800,7 +921,8 @@ START:
         ui.heading("Registers");
         ui.separator();
 
-        let can_edit = !self.is_running || self.cpu.is_halted();
+        let can_edit = !self.is_running || self.snapshot.halted;
+        let snapshot = self.snapshot.clone();
 
         egui::Grid::new("regs_grid")
             .striped(true)
@@ -858,19 +980,27 @@ START:
                     };
                 }
 
-                edit_16!("PC", self.cpu.get_pc(), |v| self.cpu.set_pc(v));
+                edit_16!("PC", snapshot.pc, |v| {
+                    self.with_machine(|m| m.cpu.set_pc(v))
+                });
                 ui.label("");
                 ui.label("");
                 ui.end_row();
-                edit_16!("SP", self.cpu.get_sp(), |v| self.cpu.set_sp(v));
+                edit_16!("SP", snapshot.sp, |v| {
+                    self.with_machine(|m| m.cpu.set_sp(v))
+                });
                 ui.label("");
                 ui.label("");
                 ui.end_row();
-                edit_16!("IX", self.cpu.get_ix(), |v| self.cpu.set_ix(v));
+                edit_16!("IX", snapshot.ix, |v| {
+                    self.with_machine(|m| m.cpu.set_ix(v))
+                });
                 ui.label("");
                 ui.label("");
                 ui.end_row();
-                edit_16!("IY", self.cpu.get_iy(), |v| self.cpu.set_iy(v));
+                edit_16!("IY", snapshot.iy, |v| {
+                    self.with_machine(|m| m.cpu.set_iy(v))
+                });
                 ui.label("");
                 ui.label("");
                 ui.end_row();
@@ -893,15 +1023,14 @@ START:
                 ];
 
                 for (name, gpr) in regs {
-                    edit_8!(name, name, self.cpu.get_register(gpr), |v| self
-                        .cpu
-                        .set_register(gpr, v));
+                    edit_8!(name, name, reg_value(&snapshot, gpr), |v| self
+                        .with_machine(|m| m.cpu.set_register(gpr, v)));
                     let shadow_name = format!("{}'", name);
                     edit_8!(
                         shadow_name.clone(),
                         shadow_name,
-                        self.cpu.get_shadow_register(gpr),
-                        |v| self.cpu.set_shadow_register(gpr, v)
+                        shadow_reg_value(&snapshot, gpr),
+                        |v| self.with_machine(|m| m.cpu.set_shadow_register(gpr, v))
                     );
                     ui.end_row();
                 }
@@ -914,17 +1043,17 @@ START:
 
                 let mono = |text: String| egui::RichText::new(text).monospace();
                 ui.label("IFF1");
-                ui.label(mono(format!("{}", self.cpu.get_iff1())));
+                ui.label(mono(format!("{}", snapshot.iff1)));
                 ui.label("");
                 ui.label("");
                 ui.end_row();
                 ui.label("IFF2");
-                ui.label(mono(format!("{}", self.cpu.get_iff2())));
+                ui.label(mono(format!("{}", snapshot.iff2)));
                 ui.label("");
                 ui.label("");
                 ui.end_row();
                 ui.label("IM");
-                ui.label(mono(format!("{}", self.cpu.get_interrupt_mode())));
+                ui.label(mono(format!("{}", snapshot.interrupt_mode)));
                 ui.label("");
                 ui.label("");
                 ui.end_row();
@@ -946,7 +1075,7 @@ START:
                 (Flag::N, "N"),
                 (Flag::C, "C"),
             ] {
-                let on = self.cpu.get_flag(flag);
+                let on = snapshot_flag(&snapshot, flag);
                 let color = if on {
                     egui::Color32::from_rgb(0, 255, 0)
                 } else {
@@ -978,7 +1107,7 @@ START:
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
                     if interact_resp.clicked() {
-                        self.cpu.set_flag(!on, flag);
+                        self.with_machine(|m| m.cpu.set_flag(!on, flag));
                     }
                 }
             }
@@ -1000,9 +1129,6 @@ START:
 
 impl Default for Z80App {
     fn default() -> Self {
-        let memory: Rc<RefCell<dyn MemoryMapper>> = Rc::new(RefCell::new(Mem64k::new()));
-        let cpu = Z80A::new(memory.clone());
-
         #[cfg(target_arch = "wasm32")]
         let (examples_sender, examples_receiver) = channel();
 
@@ -1039,8 +1165,19 @@ impl Default for Z80App {
         }
 
         Self {
-            cpu,
-            memory,
+            machine: Some(Machine::new()),
+            snapshot: MachineSnapshot::default(),
+            runner: {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    Runner::cooperative()
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    Runner::threaded()
+                }
+            },
+            breakpoint_addrs: HashSet::new(),
             tabs: vec![EditorTab {
                 path: None,
                 breakpoints: HashSet::new(),
@@ -1057,6 +1194,7 @@ impl Default for Z80App {
             assembly_lines: HashMap::new(),
             symbol_display_prefs: HashMap::new(),
             is_running: false,
+            last_stop_reason: None,
             pending_modal: None,
             loaded_file_name: "Untitled".to_string(),
             code_theme: highlighting::CodeTheme::one_dark_pro_vivid(),
@@ -1107,6 +1245,10 @@ impl eframe::App for Z80App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.pending_modal = Some(ModalType::Quit);
             }
+        }
+
+        if !self.is_running {
+            self.refresh_snapshot();
         }
 
         let mut action = self.check_shortcuts(&ctx);
@@ -1231,7 +1373,7 @@ impl eframe::App for Z80App {
                         ui.separator();
                         ui.label("Manage Windows:");
                         for dev in &self.attached_devices {
-                            let mut dev_ref = dev.borrow_mut();
+                            let mut dev_ref = dev.lock().unwrap();
                             let name = dev_ref.get_name();
                             let mut open = dev_ref.get_window_open_state();
                             if ui.checkbox(&mut open, name).changed() {
@@ -1298,12 +1440,12 @@ impl eframe::App for Z80App {
                     .clicked()
                 {
                     self.is_running = false;
-                    self.cpu.tick();
+                    self.with_machine(|m| m.cpu.tick());
                 }
 
                 let run_label = if self.is_running {
                     "⏸ Stop"
-                } else if self.cpu.get_pc() > 0 && !self.cpu.is_halted() {
+                } else if self.snapshot.pc > 0 && !self.snapshot.halted {
                     "▶ Resume"
                 } else {
                     "▶ Run"
@@ -1313,25 +1455,16 @@ impl eframe::App for Z80App {
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
                 {
-                    if !self.is_running && !self.cpu.is_halted() {
-                        // Check if we are at a breakpoint, and if so, step once
-                        let pc = self.cpu.get_pc();
-                        let mut at_bp = false;
-                        if let Some(tab) = self.tabs.get(self.active_tab) {
-                            for &bp_line in &tab.breakpoints {
-                                if let Some(&addr) = self.line_to_address.get(&bp_line)
-                                    && addr == pc
-                                {
-                                    at_bp = true;
-                                    break;
-                                }
-                            }
+                    if self.is_running {
+                        self.stop_execution();
+                    } else {
+                        if !self.snapshot.halted
+                            && self.breakpoint_addrs.contains(&self.snapshot.pc)
+                        {
+                            self.with_machine(|m| m.cpu.tick());
                         }
-                        if at_bp {
-                            self.cpu.tick();
-                        }
+                        self.start_execution();
                     }
-                    self.is_running = !self.is_running;
                 }
 
                 ui.separator();
@@ -1341,7 +1474,11 @@ impl eframe::App for Z80App {
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
                 {
-                    self.cpu.set_interrupt(true);
+                    if self.is_running {
+                        self.runner.send_command(Command::SetInterrupt(true));
+                    } else {
+                        self.with_machine(|m| m.cpu.set_interrupt(true));
+                    }
                 }
 
                 if ui
@@ -1349,25 +1486,37 @@ impl eframe::App for Z80App {
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
                 {
-                    self.cpu.nmi();
+                    if self.is_running {
+                        self.runner.send_command(Command::Nmi);
+                    } else {
+                        self.with_machine(|m| m.cpu.nmi());
+                    }
                 }
 
                 ui.separator();
 
                 if let Some(err) = &self.last_error {
                     ui.colored_label(egui::Color32::RED, format!("⚠ {}", err));
-                } else if self.cpu.is_halted() {
+                } else if self.snapshot.halted {
                     ui.colored_label(egui::Color32::RED, "HALTED");
                     if ui
                         .button("Resume")
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .clicked()
                     {
-                        self.cpu.set_halted(false);
-                        self.is_running = true;
+                        if self.is_running {
+                            self.runner.send_command(Command::Resume);
+                        } else {
+                            self.with_machine(|m| m.cpu.set_halted(false));
+                        }
                     }
                 } else if self.is_running {
                     ui.label(egui::RichText::new("Running").color(egui::Color32::GREEN));
+                } else if let Some(StopReason::Breakpoint(addr)) = self.last_stop_reason {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(255, 180, 60),
+                        format!("Stopped at breakpoint 0x{:04X}", addr),
+                    );
                 } else {
                     ui.label(egui::RichText::new("Paused").color(egui::Color32::YELLOW));
                 }
@@ -1462,12 +1611,12 @@ impl eframe::App for Z80App {
                                         SymbolDisplayFormat::Default => {
                                             match symbol.kind {
                                                 SymbolType::Byte => {
-                                                    let val = self.memory.borrow().read(addr);
+                                                    let val = self.snapshot.memory[addr as usize];
                                                     ui.monospace(format!("0x{:02X}", val));
                                                 }
                                                 SymbolType::Word => {
-                                                    let low = self.memory.borrow().read(addr);
-                                                    let high = self.memory.borrow().read(addr.wrapping_add(1));
+                                                    let low = self.snapshot.memory[addr as usize];
+                                                    let high = self.snapshot.memory[addr.wrapping_add(1) as usize];
                                                     let val = (low as u16) | ((high as u16) << 8);
                                                     ui.monospace(format!("0x{:04X}", val));
                                                 }
@@ -1477,7 +1626,7 @@ impl eframe::App for Z80App {
                                                     // Read at most 20 chars for preview, but check for null terminator
                                                     let display_len = len.min(20);
                                                     for i in 0..display_len {
-                                                        let b = self.memory.borrow().read(addr.wrapping_add(i as u16));
+                                                        let b = self.snapshot.memory[addr.wrapping_add(i as u16) as usize];
                                                         if b == 0 { break; }
                                                         bytes.push(b);
                                                     }
@@ -1490,7 +1639,7 @@ impl eframe::App for Z80App {
                                                         // Read full content for tooltip
                                                         let mut full_bytes = Vec::new();
                                                         for i in 0..len {
-                                                            let b = self.memory.borrow().read(addr.wrapping_add(i as u16));
+                                                            let b = self.snapshot.memory[addr.wrapping_add(i as u16) as usize];
                                                             if b == 0 { break; }
                                                             full_bytes.push(b);
                                                         }
@@ -1513,14 +1662,14 @@ impl eframe::App for Z80App {
                                                     let mut bytes = Vec::new();
                                                     let display_len = len.min(8);
                                                     for i in 0..display_len {
-                                                        bytes.push(self.memory.borrow().read(addr.wrapping_add(i as u16)));
+                                                        bytes.push(self.snapshot.memory[addr.wrapping_add(i as u16) as usize]);
                                                     }
                                                     let hex_str: Vec<String> = bytes.iter().map(|b| format!("{:02X}", b)).collect();
                                                     if len > 8 {
                                                         // Read full content for tooltip
                                                         let mut full_bytes = Vec::new();
                                                         for i in 0..len {
-                                                            full_bytes.push(self.memory.borrow().read(addr.wrapping_add(i as u16)));
+                                                            full_bytes.push(self.snapshot.memory[addr.wrapping_add(i as u16) as usize]);
                                                         }
                                                         let full_hex: Vec<String> = full_bytes.iter().map(|b| format!("{:02X}", b)).collect();
 
@@ -1545,7 +1694,7 @@ impl eframe::App for Z80App {
 
                                             let mut bytes = Vec::new();
                                             for i in 0..display_limit {
-                                                let b = self.memory.borrow().read(addr.wrapping_add(i as u16));
+                                                let b = self.snapshot.memory[addr.wrapping_add(i as u16) as usize];
                                                 if b == 0 { break; }
                                                 bytes.push(b);
                                             }
@@ -1566,7 +1715,7 @@ impl eframe::App for Z80App {
                                                  let mut full_bytes = Vec::new();
                                                  // Scan up to max_scan_len (which is allocated length)
                                                  for i in 0..max_scan_len {
-                                                     let b = self.memory.borrow().read(addr.wrapping_add(i as u16));
+                                                     let b = self.snapshot.memory[addr.wrapping_add(i as u16) as usize];
                                                      if b == 0 { break; }
                                                      full_bytes.push(b);
                                                  }
@@ -1593,13 +1742,13 @@ impl eframe::App for Z80App {
                                             let mut bytes = Vec::new();
                                             let display_len = len.clamp(1, 8); // At least 1 byte
                                             for i in 0..display_len {
-                                                bytes.push(self.memory.borrow().read(addr.wrapping_add(i as u16)));
+                                                bytes.push(self.snapshot.memory[addr.wrapping_add(i as u16) as usize]);
                                             }
                                             let hex_str: Vec<String> = bytes.iter().map(|b| format!("{:02X}", b)).collect();
                                             if len > 8 {
                                                  let mut full_bytes = Vec::new();
                                                  for i in 0..len {
-                                                     full_bytes.push(self.memory.borrow().read(addr.wrapping_add(i as u16)));
+                                                     full_bytes.push(self.snapshot.memory[addr.wrapping_add(i as u16) as usize]);
                                                  }
                                                  let full_hex: Vec<String> = full_bytes.iter().map(|b| format!("{:02X}", b)).collect();
                                                 ui.monospace(format!("[{}...]", hex_str.join(" ")))
@@ -1619,7 +1768,7 @@ impl eframe::App for Z80App {
                                             let word_count = len / 2;
                                             if word_count == 0 {
                                                  // Fallback for single byte if forced?
-                                                 let val = self.memory.borrow().read(addr);
+                                                 let val = self.snapshot.memory[addr as usize];
                                                  ui.monospace(format!("[00{:02X}:inv]", val))
                                                     .on_hover_text("Odd length, cannot display as words correctly");
                                             } else {
@@ -1627,16 +1776,16 @@ impl eframe::App for Z80App {
                                                 let display_count = word_count.min(4);
                                                 for i in 0..display_count {
                                                     let offset = (i * 2) as u16;
-                                                    let low = self.memory.borrow().read(addr.wrapping_add(offset));
-                                                    let high = self.memory.borrow().read(addr.wrapping_add(offset + 1));
+                                                    let low = self.snapshot.memory[addr.wrapping_add(offset) as usize];
+                                                    let high = self.snapshot.memory[addr.wrapping_add(offset + 1) as usize];
                                                     words.push(format!("{:04X}", (low as u16) | ((high as u16) << 8)));
                                                 }
                                                 if word_count > 4 {
                                                      let mut full_words = Vec::new();
                                                      for i in 0..word_count {
                                                          let offset = (i * 2) as u16;
-                                                         let low = self.memory.borrow().read(addr.wrapping_add(offset));
-                                                         let high = self.memory.borrow().read(addr.wrapping_add(offset + 1));
+                                                         let low = self.snapshot.memory[addr.wrapping_add(offset) as usize];
+                                                         let high = self.snapshot.memory[addr.wrapping_add(offset + 1) as usize];
                                                          full_words.push(format!("{:04X}", (low as u16) | ((high as u16) << 8)));
                                                      }
                                                     ui.monospace(format!("[{}...]", words.join(" ")))
@@ -2006,9 +2155,9 @@ impl eframe::App for Z80App {
                             // Add a matching header so the text edit component starts exactly on the same row!
                             ui.label(egui::RichText::new("Code").font(font_id.clone()).strong().color(egui::Color32::GRAY));
 
-                            let highlight_line = if !self.is_running || self.cpu.is_halted() {
-                                let pc = self.cpu.get_pc();
-                                if self.cpu.is_halted() {
+                            let highlight_line = if !self.is_running || self.snapshot.halted {
+                                let pc = self.snapshot.pc;
+                                if self.snapshot.halted {
                                     let mut best_match = None;
                                     let mut max_addr = -1i32;
 
@@ -2108,7 +2257,7 @@ impl eframe::App for Z80App {
                                     match port_res {
                                         Ok(port) => {
                                             let dev = (definition.create)(port);
-                                            self.cpu.attach_device(dev.clone());
+                                            self.with_machine(|m| m.cpu.attach_device(dev.clone()));
                                             self.attached_devices.push(dev);
                                             should_close_modal = true;
                                         }
@@ -2249,52 +2398,21 @@ impl eframe::App for Z80App {
         }
 
         if self.is_running {
-            let mut steps = 0;
-            // Optimization: Clone breakpoints once before the tight loop.
-            // This prevents looking up the tab and the hashset 10,000 times per frame.
-            let active_breakpoints = self
-                .tabs
-                .get(self.active_tab)
-                .map(|t| t.breakpoints.clone())
-                .unwrap_or_default();
-
-            // Execute in batches to keep UI responsive
-            while steps < 10000 {
-                if self.cpu.is_halted() {
-                    // Even if halted, we must continue ticking to handle interrupts!
-                    // tick() checks interrupts.
-                    self.cpu.tick();
-
-                    // If we just woke up, we continue normal execution in this loop.
-                    if !self.cpu.is_halted() {
-                        steps += 1;
-                        continue;
+            for event in self.runner.poll() {
+                match event {
+                    Event::Snapshot(snapshot) => {
+                        self.snapshot = snapshot;
                     }
-
-                    // If still halted, we stop this batch to avoid spinning 10000 times on a halted cpu per frame.
-                    // We need to request repaint though (handled below)
-                    break;
+                    Event::Finished(reason) => {
+                        self.is_running = false;
+                        self.last_stop_reason = Some(reason);
+                    }
                 }
-
-                // Check for breakpoint
-                let pc = self.cpu.get_pc();
-                if self
-                    .line_to_address
-                    .iter()
-                    .any(|(line, &addr)| addr == pc && active_breakpoints.contains(line))
-                {
-                    self.is_running = false;
-                    break;
-                }
-
-                self.cpu.tick();
-                steps += 1;
             }
             if self.is_running {
-                ctx.request_repaint();
-                // If halted, we still want to repaint/re-check because UI interaction (keypad)
-                // might change device state, which needs to be picked up by next tick.
+                ctx.request_repaint_after(Duration::from_millis(16));
             }
+            self.ensure_machine_reclaimed();
         }
 
         // Draw Memory Viewer Window
@@ -2314,7 +2432,7 @@ impl eframe::App for Z80App {
                                 .font(egui::TextStyle::Monospace),
                         );
                         if ui.button("Goto PC").clicked() {
-                            self.memory_viewer_start = format!("{:04X}", self.cpu.get_pc());
+                            self.memory_viewer_start = format!("{:04X}", self.snapshot.pc);
                             response.request_focus();
                         }
                     });
@@ -2344,7 +2462,7 @@ impl eframe::App for Z80App {
 
                                     for c in 0..16 {
                                         let addr = row_addr.wrapping_add(c);
-                                        let val = self.memory.borrow().read(addr);
+                                        let val = self.snapshot.memory[addr as usize];
                                         hex_str.push_str(&format!("{:02X} ", val));
 
                                         // Ascii representation
@@ -2367,7 +2485,9 @@ impl eframe::App for Z80App {
 
         // Draw separate windows for devices
         for device in &self.attached_devices {
-            device.borrow_mut().draw(&ctx);
+            device.lock().unwrap().draw(&ctx);
         }
+
+        self.sync_breakpoints();
     }
 }
