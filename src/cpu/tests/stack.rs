@@ -44,7 +44,7 @@ fn test_stack(
 
     // 1. Setup Memory (Pre-load existing stack data if any)
     for &(addr, val) in mem_init {
-        cpu.memory.borrow_mut().write(addr, val);
+        cpu.memory.write(addr, val);
     }
 
     // 2. Set SP

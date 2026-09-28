@@ -14,13 +14,13 @@ fn prepare_cpu(cpu: &mut Z80A, prefix: u8, displacement: u8, initial_val: u8) {
         cpu.set_index_register(IndexRegister::IY, base_addr);
     }
 
-    cpu.memory.borrow_mut().write(target_addr, initial_val);
+    cpu.memory.write(target_addr, initial_val);
 
     // Write instruction to instruction memory at PC=0
     // Format: [Prefix] [CB] [Displacement] [Opcode]
-    cpu.memory.borrow_mut().write(0x0000, prefix);
-    cpu.memory.borrow_mut().write(0x0001, 0xCB);
-    cpu.memory.borrow_mut().write(0x0002, displacement);
+    cpu.memory.write(0x0000, prefix);
+    cpu.memory.write(0x0001, 0xCB);
+    cpu.memory.write(0x0002, displacement);
     // Opcode will be written in the test function
 }
 
@@ -55,7 +55,7 @@ fn test_ddcb_fdcb_ops(
     prepare_cpu(&mut cpu, prefix, displacement, initial_val);
 
     // Write opcode
-    cpu.memory.borrow_mut().write(0x0003, opcode);
+    cpu.memory.write(0x0003, opcode);
 
     // Execute
     cpu.pc = 0x0000;
@@ -64,7 +64,7 @@ fn test_ddcb_fdcb_ops(
     // Verification
     let base_addr = 0x1000;
     let target_addr = base_addr + displacement as u16;
-    let actual_mem_val = cpu.memory.borrow().read(target_addr);
+    let actual_mem_val = cpu.memory.read(target_addr);
 
     assert_eq!(actual_mem_val, expected_val, "Memory value mismatch");
 
@@ -105,7 +105,7 @@ fn test_ddcb_bit(
     let displacement = 0x10;
 
     prepare_cpu(&mut cpu, prefix, displacement, initial_val);
-    cpu.memory.borrow_mut().write(0x0003, opcode);
+    cpu.memory.write(0x0003, opcode);
 
     // Clear B to ensure it's not written to if we happened to test 'z=0' case,
     // though for BIT we expect no write.
@@ -120,7 +120,7 @@ fn test_ddcb_bit(
     // Check memory UNCHANGED
     let base_addr = 0x1000;
     let target_addr = base_addr + displacement as u16;
-    let mem_val = cpu.memory.borrow().read(target_addr);
+    let mem_val = cpu.memory.read(target_addr);
     assert_eq!(
         mem_val, initial_val,
         "BIT instruction should not modify memory"
@@ -136,7 +136,7 @@ fn test_ddcb_bit_undocumented_no_copy() {
     let opcode = 0x40; // BIT 0, (IX+d), B (theoretically, but BIT has no copy)
 
     prepare_cpu(&mut cpu, prefix, displacement, initial_val);
-    cpu.memory.borrow_mut().write(0x0003, opcode);
+    cpu.memory.write(0x0003, opcode);
 
     // Set B to something specific
     cpu.set_register(GPR::B, 0x55);

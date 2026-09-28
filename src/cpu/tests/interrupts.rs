@@ -1,7 +1,6 @@
 use crate::cpu::tests::setup_cpu;
 use crate::traits::{IODevice, SynchronousComponent};
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 struct MockInterruptDevice {
     active: bool,
@@ -39,27 +38,27 @@ impl IODevice for MockInterruptDevice {
 #[test]
 fn test_interrupt_mode_0() {
     let mut cpu = setup_cpu();
-    let dev = Rc::new(RefCell::new(MockInterruptDevice::new(0xFF))); // RST 38H
+    let dev = Arc::new(Mutex::new(MockInterruptDevice::new(0xFF))); // RST 38H
     cpu.attach_device(dev.clone());
 
     cpu.sp = 0xFFFF;
-    cpu.memory.borrow_mut().write(0x0038, 0x00); // NOP at ISR
+    cpu.memory.write(0x0038, 0x00); // NOP at ISR
 
     // 0000: ED 46 (IM 0)
     // 0002: FB (EI)
     // 0003: 00 (NOP)
     // 0004: 00 (NOP)
 
-    cpu.memory.borrow_mut().write(0x0000, 0xED);
-    cpu.memory.borrow_mut().write(0x0001, 0x46);
-    cpu.memory.borrow_mut().write(0x0002, 0xFB);
-    cpu.memory.borrow_mut().write(0x0003, 0x00);
-    cpu.memory.borrow_mut().write(0x0004, 0x00);
+    cpu.memory.write(0x0000, 0xED);
+    cpu.memory.write(0x0001, 0x46);
+    cpu.memory.write(0x0002, 0xFB);
+    cpu.memory.write(0x0003, 0x00);
+    cpu.memory.write(0x0004, 0x00);
 
     cpu.tick(); // IM 0
     cpu.tick(); // EI
 
-    dev.borrow_mut().trigger();
+    dev.lock().unwrap().trigger();
 
     cpu.tick(); // NOP (Enable takes effect after)
 
@@ -72,19 +71,19 @@ fn test_interrupt_mode_0() {
 #[test]
 fn test_interrupt_mode_1() {
     let mut cpu = setup_cpu();
-    let dev = Rc::new(RefCell::new(MockInterruptDevice::new(0x00)));
+    let dev = Arc::new(Mutex::new(MockInterruptDevice::new(0x00)));
     cpu.attach_device(dev.clone());
     cpu.sp = 0xFFFF;
 
-    cpu.memory.borrow_mut().write(0x0000, 0xED);
-    cpu.memory.borrow_mut().write(0x0001, 0x56); // IM 1
-    cpu.memory.borrow_mut().write(0x0002, 0xFB); // EI
-    cpu.memory.borrow_mut().write(0x0003, 0x00);
-    cpu.memory.borrow_mut().write(0x0004, 0x00);
+    cpu.memory.write(0x0000, 0xED);
+    cpu.memory.write(0x0001, 0x56); // IM 1
+    cpu.memory.write(0x0002, 0xFB); // EI
+    cpu.memory.write(0x0003, 0x00);
+    cpu.memory.write(0x0004, 0x00);
 
     cpu.tick();
     cpu.tick();
-    dev.borrow_mut().trigger();
+    dev.lock().unwrap().trigger();
     cpu.tick();
 
     cpu.tick();
@@ -96,30 +95,30 @@ fn test_interrupt_mode_1() {
 #[test]
 fn test_interrupt_mode_2() {
     let mut cpu = setup_cpu();
-    let dev = Rc::new(RefCell::new(MockInterruptDevice::new(0x04)));
+    let dev = Arc::new(Mutex::new(MockInterruptDevice::new(0x04)));
     cpu.attach_device(dev.clone());
     cpu.sp = 0xFFFF;
 
     // I = 0x20. ISR table at 0x2004 -> points to 0x3000
-    cpu.memory.borrow_mut().write_word(0x2004, 0x3000);
+    cpu.memory.write_word(0x2004, 0x3000);
 
     // LD A, 20H; LD I, A; IM 2; EI; NOP; NOP
-    cpu.memory.borrow_mut().write(0x0000, 0x3E);
-    cpu.memory.borrow_mut().write(0x0001, 0x20);
-    cpu.memory.borrow_mut().write(0x0002, 0xED);
-    cpu.memory.borrow_mut().write(0x0003, 0x47);
-    cpu.memory.borrow_mut().write(0x0004, 0xED);
-    cpu.memory.borrow_mut().write(0x0005, 0x5E);
-    cpu.memory.borrow_mut().write(0x0006, 0xFB);
-    cpu.memory.borrow_mut().write(0x0007, 0x00);
-    cpu.memory.borrow_mut().write(0x0008, 0x00);
+    cpu.memory.write(0x0000, 0x3E);
+    cpu.memory.write(0x0001, 0x20);
+    cpu.memory.write(0x0002, 0xED);
+    cpu.memory.write(0x0003, 0x47);
+    cpu.memory.write(0x0004, 0xED);
+    cpu.memory.write(0x0005, 0x5E);
+    cpu.memory.write(0x0006, 0xFB);
+    cpu.memory.write(0x0007, 0x00);
+    cpu.memory.write(0x0008, 0x00);
 
     cpu.tick(); // LD A
     cpu.tick(); // LD I
     cpu.tick(); // IM 2
     cpu.tick(); // EI
 
-    dev.borrow_mut().trigger();
+    dev.lock().unwrap().trigger();
     cpu.tick(); // NOP
 
     cpu.tick(); // Interrupt logic
@@ -132,10 +131,10 @@ fn test_interrupt_mode_2() {
 fn test_reti() {
     let mut cpu = setup_cpu();
     cpu.sp = 0xFFFD;
-    cpu.memory.borrow_mut().write_word(0xFFFD, 0x1234);
+    cpu.memory.write_word(0xFFFD, 0x1234);
 
-    cpu.memory.borrow_mut().write(0x0000, 0xED);
-    cpu.memory.borrow_mut().write(0x0001, 0x4D); // RETI
+    cpu.memory.write(0x0000, 0xED);
+    cpu.memory.write(0x0001, 0x4D); // RETI
 
     cpu.tick();
 
@@ -146,12 +145,12 @@ fn test_reti() {
 fn test_retn() {
     let mut cpu = setup_cpu();
     cpu.sp = 0xFFFD;
-    cpu.memory.borrow_mut().write_word(0xFFFD, 0x5678);
+    cpu.memory.write_word(0xFFFD, 0x5678);
     cpu.iff1 = false;
     cpu.iff2 = true;
 
-    cpu.memory.borrow_mut().write(0x0000, 0xED);
-    cpu.memory.borrow_mut().write(0x0001, 0x45); // RETN
+    cpu.memory.write(0x0000, 0xED);
+    cpu.memory.write(0x0001, 0x45); // RETN
 
     cpu.tick();
 

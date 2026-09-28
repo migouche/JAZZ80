@@ -56,19 +56,17 @@ fn test_rot(
     let mut cpu = setup_cpu();
     cpu.pc = initial_pc;
     cpu.set_register(GPR::A, initial_a);
-    cpu.memory.borrow_mut().write(initial_pc, PREFIX);
-    cpu.memory
-        .borrow_mut()
-        .write(initial_pc.overflowing_add(1).0, opcode);
+    cpu.memory.write(initial_pc, PREFIX);
+    cpu.memory.write(initial_pc.overflowing_add(1).0, opcode);
     cpu.set_register_pair(RegisterPair::HL, initial_hl);
-    cpu.memory.borrow_mut().write(initial_hl, initial_hl_val);
+    cpu.memory.write(initial_hl, initial_hl_val);
 
     // Execute instruction
     cpu.tick();
 
     // Check results
     let result_a = cpu.get_register(GPR::A);
-    let result_hl_val = cpu.memory.borrow().read(initial_hl);
+    let result_hl_val = cpu.memory.read(initial_hl);
     let result_flags = cpu.get_register(GPR::F);
 
     assert_eq!(

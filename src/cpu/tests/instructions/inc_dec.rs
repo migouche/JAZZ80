@@ -56,19 +56,19 @@ fn test_inc_dec_8(
         AddressingMode::RegisterIndirect(rp) => {
             let addr = 0x1000;
             cpu.set_register_pair(rp, addr);
-            cpu.memory.borrow_mut().write(addr, initial_val);
+            cpu.memory.write(addr, initial_val);
         }
         _ => panic!("Unsupported addressing mode for test setup"),
     }
 
-    cpu.memory.borrow_mut().write(0x0000, opcode);
+    cpu.memory.write(0x0000, opcode);
     cpu.tick();
 
     let result_val = match target {
         AddressingMode::Register(r) => cpu.get_register(r),
         AddressingMode::RegisterIndirect(rp) => {
             let addr = cpu.get_register_pair(rp);
-            cpu.memory.borrow().read(addr)
+            cpu.memory.read(addr)
         }
         _ => panic!("Unsupported addressing mode for test check"),
     };
@@ -177,7 +177,7 @@ fn test_inc_dec_16(
         _ => panic!("Unsupported addressing mode"),
     }
 
-    cpu.memory.borrow_mut().write(0x0000, opcode);
+    cpu.memory.write(0x0000, opcode);
     cpu.tick();
 
     let result_val = match target {

@@ -67,7 +67,7 @@ fn test_pop(
     cpu.sp = starting_sp;
 
     for (addr, value) in memory_contents {
-        cpu.memory.borrow_mut().write(*addr, *value);
+        cpu.memory.write(*addr, *value);
     }
 
     // Write the POP instruction at the current PC
@@ -78,7 +78,7 @@ fn test_pop(
         RegisterPair::AF => 0xF1,
         _ => panic!("Invalid register for POP instruction"),
     };
-    cpu.memory.borrow_mut().write(cpu.pc, pop_opcode);
+    cpu.memory.write(cpu.pc, pop_opcode);
 
     cpu.tick();
 
@@ -165,7 +165,7 @@ fn test_push(
         RegisterPair::AF => 0xF5,
         _ => panic!("Invalid register for PUSH instruction"),
     };
-    cpu.memory.borrow_mut().write(cpu.pc, push_opcode);
+    cpu.memory.write(cpu.pc, push_opcode);
 
     cpu.tick();
 
@@ -178,7 +178,7 @@ fn test_push(
 
     // Verify Memory contents
     for (addr, expected_val) in expected_mem {
-        let actual_val = cpu.memory.borrow().read(*addr);
+        let actual_val = cpu.memory.read(*addr);
         assert_eq!(
             actual_val, *expected_val,
             "Memory mismatch at {:04X}: expected {:02X}, got {:02X}",

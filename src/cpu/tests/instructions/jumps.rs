@@ -41,10 +41,8 @@ fn test_djnz(
 
     cpu.pc = starting_pc;
     cpu.set_register(crate::cpu::GPR::B, initial_b);
-    cpu.memory.borrow_mut().write(cpu.pc, DJNZ_OPCODE);
-    cpu.memory
-        .borrow_mut()
-        .write(cpu.pc.wrapping_add(1), displacement);
+    cpu.memory.write(cpu.pc, DJNZ_OPCODE);
+    cpu.memory.write(cpu.pc.wrapping_add(1), displacement);
     cpu.tick(); // Fetch DJNZ
 
     assert_eq!(
@@ -70,10 +68,8 @@ fn test_jr_d(#[case] starting_pc: u16, #[case] displacement: u8, #[case] expecte
     let mut cpu = setup_cpu();
 
     cpu.pc = starting_pc;
-    cpu.memory.borrow_mut().write(cpu.pc, JR_D_OPCODE); // JR d opcode
-    cpu.memory
-        .borrow_mut()
-        .write(cpu.pc.wrapping_add(1), displacement);
+    cpu.memory.write(cpu.pc, JR_D_OPCODE); // JR d opcode
+    cpu.memory.write(cpu.pc.wrapping_add(1), displacement);
     cpu.tick(); // Fetch JR d
 
     assert_eq!(
@@ -103,10 +99,8 @@ fn test_jr_cc_d(
 
     cpu.pc = starting_pc;
     cpu.set_register(GPR::F, flags);
-    cpu.memory.borrow_mut().write(cpu.pc, opcode); // JR cc[y-4], d opcode
-    cpu.memory
-        .borrow_mut()
-        .write(cpu.pc.wrapping_add(1), displacement);
+    cpu.memory.write(cpu.pc, opcode); // JR cc[y-4], d opcode
+    cpu.memory.write(cpu.pc.wrapping_add(1), displacement);
     cpu.tick(); // Fetch JR cc[y-4], d
 
     assert_eq!(
@@ -124,18 +118,14 @@ fn test_jp(#[case] starting_pc: u16, #[case] target_addr: u16) {
     let mut cpu = setup_cpu();
 
     cpu.pc = starting_pc;
-    cpu.memory.borrow_mut().write(cpu.pc, JP_OPCODE);
+    cpu.memory.write(cpu.pc, JP_OPCODE);
 
     // JP uses Little-Endian for the address (Low Byte first)
     let low_byte = (target_addr & 0xFF) as u8;
     let high_byte = ((target_addr >> 8) & 0xFF) as u8;
 
-    cpu.memory
-        .borrow_mut()
-        .write(cpu.pc.wrapping_add(1), low_byte);
-    cpu.memory
-        .borrow_mut()
-        .write(cpu.pc.wrapping_add(2), high_byte);
+    cpu.memory.write(cpu.pc.wrapping_add(1), low_byte);
+    cpu.memory.write(cpu.pc.wrapping_add(2), high_byte);
 
     cpu.tick();
 
@@ -181,18 +171,14 @@ fn test_jp_cc(
 
     cpu.pc = starting_pc;
     cpu.set_register(GPR::F, flags);
-    cpu.memory.borrow_mut().write(cpu.pc, opcode);
+    cpu.memory.write(cpu.pc, opcode);
 
     // Write Little-Endian Address (Target)
     let low_byte = (target_addr & 0xFF) as u8;
     let high_byte = ((target_addr >> 8) & 0xFF) as u8;
 
-    cpu.memory
-        .borrow_mut()
-        .write(cpu.pc.wrapping_add(1), low_byte);
-    cpu.memory
-        .borrow_mut()
-        .write(cpu.pc.wrapping_add(2), high_byte);
+    cpu.memory.write(cpu.pc.wrapping_add(1), low_byte);
+    cpu.memory.write(cpu.pc.wrapping_add(2), high_byte);
 
     cpu.tick();
 
@@ -219,7 +205,7 @@ fn test_jp_hl(#[case] starting_pc: u16, #[case] target_addr: u16) {
     cpu.set_register_pair(RegisterPair::HL, target_addr);
 
     // Write the opcode
-    cpu.memory.borrow_mut().write(cpu.pc, JP_HL_OPCODE);
+    cpu.memory.write(cpu.pc, JP_HL_OPCODE);
 
     cpu.tick();
 

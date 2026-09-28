@@ -13,15 +13,15 @@ fn test_ldi() {
     cpu.set_register_pair(RegisterPair::DE, 0x2000);
     cpu.set_register_pair(RegisterPair::BC, 0x0001);
 
-    cpu.memory.borrow_mut().write(0x1000, 0xAA);
+    cpu.memory.write(0x1000, 0xAA);
 
     // ED A0 is LDI
-    cpu.memory.borrow_mut().write(0x0000, 0xED);
-    cpu.memory.borrow_mut().write(0x0001, 0xA0);
+    cpu.memory.write(0x0000, 0xED);
+    cpu.memory.write(0x0001, 0xA0);
 
     cpu.tick(); // ED A0 (4 bytes, 16 cycles - wait logic not fully simulated in single tick unless loop, but here block instruction is atomic in our impl)
 
-    let val = cpu.memory.borrow().read(0x2000);
+    let val = cpu.memory.read(0x2000);
     assert_eq!(val, 0xAA);
     assert_eq!(cpu.get_register_pair(RegisterPair::HL), 0x1001);
     assert_eq!(cpu.get_register_pair(RegisterPair::DE), 0x2001);
@@ -40,13 +40,13 @@ fn test_ldir() {
     cpu.set_register_pair(RegisterPair::DE, 0x2000);
     cpu.set_register_pair(RegisterPair::BC, 0x0003);
 
-    cpu.memory.borrow_mut().write(0x1000, 0xAA);
-    cpu.memory.borrow_mut().write(0x1001, 0xBB);
-    cpu.memory.borrow_mut().write(0x1002, 0xCC);
+    cpu.memory.write(0x1000, 0xAA);
+    cpu.memory.write(0x1001, 0xBB);
+    cpu.memory.write(0x1002, 0xCC);
 
     // ED B0 is LDIR
-    cpu.memory.borrow_mut().write(0x0000, 0xED);
-    cpu.memory.borrow_mut().write(0x0001, 0xB0);
+    cpu.memory.write(0x0000, 0xED);
+    cpu.memory.write(0x0001, 0xB0);
 
     // Loop until Done (PC > 2)
     // Our LDIR decrements PC by 2 if BC != 0.
@@ -59,9 +59,9 @@ fn test_ldir() {
         cpu.tick();
     }
 
-    assert_eq!(cpu.memory.borrow().read(0x2000), 0xAA);
-    assert_eq!(cpu.memory.borrow().read(0x2001), 0xBB);
-    assert_eq!(cpu.memory.borrow().read(0x2002), 0xCC);
+    assert_eq!(cpu.memory.read(0x2000), 0xAA);
+    assert_eq!(cpu.memory.read(0x2001), 0xBB);
+    assert_eq!(cpu.memory.read(0x2002), 0xCC);
     assert_eq!(cpu.get_register_pair(RegisterPair::BC), 0);
     assert!(!cpu.get_flag(Flag::PV));
 }
@@ -75,15 +75,15 @@ fn test_ldd() {
     cpu.set_register_pair(RegisterPair::DE, 0x2002);
     cpu.set_register_pair(RegisterPair::BC, 0x0001);
 
-    cpu.memory.borrow_mut().write(0x1002, 0xDD);
+    cpu.memory.write(0x1002, 0xDD);
 
     // ED A8 is LDD
-    cpu.memory.borrow_mut().write(0x0000, 0xED);
-    cpu.memory.borrow_mut().write(0x0001, 0xA8);
+    cpu.memory.write(0x0000, 0xED);
+    cpu.memory.write(0x0001, 0xA8);
 
     cpu.tick();
 
-    assert_eq!(cpu.memory.borrow().read(0x2002), 0xDD);
+    assert_eq!(cpu.memory.read(0x2002), 0xDD);
     assert_eq!(cpu.get_register_pair(RegisterPair::HL), 0x1001);
     assert_eq!(cpu.get_register_pair(RegisterPair::DE), 0x2001);
     assert!(!cpu.get_flag(Flag::PV));
@@ -99,13 +99,13 @@ fn test_lddr() {
     cpu.set_register_pair(RegisterPair::DE, 0x2002);
     cpu.set_register_pair(RegisterPair::BC, 0x0003);
 
-    cpu.memory.borrow_mut().write(0x1002, 0xCC);
-    cpu.memory.borrow_mut().write(0x1001, 0xBB);
-    cpu.memory.borrow_mut().write(0x1000, 0xAA);
+    cpu.memory.write(0x1002, 0xCC);
+    cpu.memory.write(0x1001, 0xBB);
+    cpu.memory.write(0x1000, 0xAA);
 
     // ED B8 is LDDR
-    cpu.memory.borrow_mut().write(0x0000, 0xED);
-    cpu.memory.borrow_mut().write(0x0001, 0xB8);
+    cpu.memory.write(0x0000, 0xED);
+    cpu.memory.write(0x0001, 0xB8);
 
     for _ in 0..20 {
         if cpu.get_register_pair(RegisterPair::BC) == 0 {
@@ -114,9 +114,9 @@ fn test_lddr() {
         cpu.tick();
     }
 
-    assert_eq!(cpu.memory.borrow().read(0x2002), 0xCC);
-    assert_eq!(cpu.memory.borrow().read(0x2001), 0xBB);
-    assert_eq!(cpu.memory.borrow().read(0x2000), 0xAA);
+    assert_eq!(cpu.memory.read(0x2002), 0xCC);
+    assert_eq!(cpu.memory.read(0x2001), 0xBB);
+    assert_eq!(cpu.memory.read(0x2000), 0xAA);
     assert_eq!(cpu.get_register_pair(RegisterPair::BC), 0);
 }
 
@@ -130,11 +130,11 @@ fn test_cpi() {
     cpu.set_register_pair(RegisterPair::HL, 0x1000);
     cpu.set_register_pair(RegisterPair::BC, 10);
 
-    cpu.memory.borrow_mut().write(0x1000, 0x55);
+    cpu.memory.write(0x1000, 0x55);
 
     // ED A1 is CPI
-    cpu.memory.borrow_mut().write(0x0000, 0xED);
-    cpu.memory.borrow_mut().write(0x0001, 0xA1);
+    cpu.memory.write(0x0000, 0xED);
+    cpu.memory.write(0x0001, 0xA1);
 
     cpu.tick();
 
@@ -154,12 +154,12 @@ fn test_cpir_found() {
     cpu.set_register_pair(RegisterPair::HL, 0x1000);
     cpu.set_register_pair(RegisterPair::BC, 5);
 
-    cpu.memory.borrow_mut().write(0x1000, 0x00);
-    cpu.memory.borrow_mut().write(0x1001, 0x99);
+    cpu.memory.write(0x1000, 0x00);
+    cpu.memory.write(0x1001, 0x99);
 
     // ED B1 is CPIR
-    cpu.memory.borrow_mut().write(0x0000, 0xED);
-    cpu.memory.borrow_mut().write(0x0001, 0xB1);
+    cpu.memory.write(0x0000, 0xED);
+    cpu.memory.write(0x0001, 0xB1);
 
     for _ in 0..10 {
         if cpu.get_flag(Flag::Z) || cpu.get_register_pair(RegisterPair::BC) == 0 {

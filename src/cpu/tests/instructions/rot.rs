@@ -39,7 +39,7 @@ fn test_rot_accumulator(
     cpu.set_flag(true, Flag::H);
     cpu.set_flag(true, Flag::N);
 
-    cpu.memory.borrow_mut().write(0x0000, opcode);
+    cpu.memory.write(0x0000, opcode);
 
     cpu.tick();
 

@@ -108,17 +108,17 @@ fn test_add_16(
     let mut pc_offset = 0;
     match dest {
         AddressingMode::IndexRegister(IndexRegister::IX) => {
-            cpu.memory.borrow_mut().write(0x0000, 0xDD);
+            cpu.memory.write(0x0000, 0xDD);
             pc_offset = 1;
         }
         AddressingMode::IndexRegister(IndexRegister::IY) => {
-            cpu.memory.borrow_mut().write(0x0000, 0xFD);
+            cpu.memory.write(0x0000, 0xFD);
             pc_offset = 1;
         }
         _ => {}
     }
 
-    cpu.memory.borrow_mut().write(pc_offset, opcode);
+    cpu.memory.write(pc_offset, opcode);
 
     // Run
     cpu.tick(); // If prefix, tick consumes prefix? No, tick executes one instruction cycle.

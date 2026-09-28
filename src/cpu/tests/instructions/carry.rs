@@ -16,7 +16,7 @@ fn test_scf(#[case] initial_f: u8, #[case] expected_f: u8) {
     cpu.set_register(GPR::F, initial_f);
 
     cpu.pc = 0x1000;
-    cpu.memory.borrow_mut().write(cpu.pc, SCF_OPCODE);
+    cpu.memory.write(cpu.pc, SCF_OPCODE);
     cpu.tick();
 
     assert_eq!(
@@ -40,7 +40,7 @@ fn test_ccf(#[case] initial_f: u8, #[case] expected_f: u8) {
     cpu.set_register(GPR::F, initial_f);
 
     cpu.pc = 0x1000;
-    cpu.memory.borrow_mut().write(cpu.pc, CCF_OPCODE);
+    cpu.memory.write(cpu.pc, CCF_OPCODE);
     cpu.tick();
 
     assert_eq!(

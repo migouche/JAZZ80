@@ -4,33 +4,23 @@ use crate::components::memories::mem_64k::Mem64k;
 use crate::cpu::GPR;
 use crate::cpu::RegisterPair;
 use crate::cpu::Z80A;
-use crate::traits::MemoryMapper;
 use crate::traits::SynchronousComponent;
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 /// Helper function to assemble code, setup CPU, and run until halted.
-/// Returns the CPU instance, the memory reference, and the symbol table from the assembler.
-fn run_until_halt(
-    code: &str,
-    max_cycles: usize,
-) -> (Z80A, Rc<RefCell<dyn MemoryMapper>>, HashMap<String, Symbol>) {
+/// Returns the CPU instance and the symbol table from the assembler.
+fn run_until_halt(code: &str, max_cycles: usize) -> (Z80A, HashMap<String, Symbol>) {
     // Assemble
     let result = assemble_with_metadata(code).expect("Assembly failed");
     let bytes = result.bytes;
     let symbols = result.symbols;
 
     // Setup CPU
-    let memory: Rc<RefCell<dyn MemoryMapper>> = Rc::new(RefCell::new(Mem64k::new()));
-    let mut cpu = Z80A::new(memory.clone());
+    let mut cpu = Z80A::new(Mem64k::new());
 
     // Load memory
-    {
-        let mut mem = memory.borrow_mut();
-        for (i, b) in bytes.iter().enumerate() {
-            mem.write(i as u16, *b);
-        }
+    for (i, b) in bytes.iter().enumerate() {
+        cpu.memory.write(i as u16, *b);
     }
 
     // Run until HALT
@@ -42,7 +32,7 @@ fn run_until_halt(
 
     assert!(cpu.is_halted(), "CPU did not halt within limit");
 
-    (cpu, memory, symbols)
+    (cpu, symbols)
 }
 
 #[test]
@@ -114,13 +104,13 @@ END:
                 HALT
         "#;
 
-    let (_, memory, symbols) = run_until_halt(code, 100000);
+    let (cpu, symbols) = run_until_halt(code, 100000);
 
     // Check Result
     let result_sym = symbols.get("RESULT").expect("Label RESULT not found");
     let result_addr = result_sym.address;
-    let res_low = memory.borrow().read(result_addr);
-    let res_high = memory.borrow().read(result_addr + 1);
+    let res_low = cpu.memory.read(result_addr);
+    let res_high = cpu.memory.read(result_addr + 1);
     let res = u16::from_le_bytes([res_low, res_high]);
 
     // Expected F(15) = 610 (0x0262) for N=16
@@ -138,14 +128,10 @@ fn test_fibonacci_execution_binary() {
         .join("fib.bin");
     let bytes = std::fs::read(path).expect("failed to read fib.bin");
 
-    let memory: Rc<RefCell<dyn MemoryMapper>> = Rc::new(RefCell::new(Mem64k::new()));
-    let mut cpu = Z80A::new(memory.clone());
+    let mut cpu = Z80A::new(Mem64k::new());
 
-    {
-        let mut mem = memory.borrow_mut();
-        for (i, b) in bytes.iter().enumerate() {
-            mem.write(i as u16, *b);
-        }
+    for (i, b) in bytes.iter().enumerate() {
+        cpu.memory.write(i as u16, *b);
     }
 
     let mut cycles = 0;
@@ -159,14 +145,10 @@ fn test_fibonacci_execution_binary() {
     let n_addr = 0x0003;
     let result_addr = 0x0004;
 
-    assert_eq!(
-        memory.borrow().read(n_addr),
-        0x10,
-        "N should be 0x10 at 0003"
-    );
+    assert_eq!(cpu.memory.read(n_addr), 0x10, "N should be 0x10 at 0003");
 
-    let res_low = memory.borrow().read(result_addr);
-    let res_high = memory.borrow().read(result_addr + 1);
+    let res_low = cpu.memory.read(result_addr);
+    let res_high = cpu.memory.read(result_addr + 1);
     let res = u16::from_le_bytes([res_low, res_high]);
 
     assert_eq!(
@@ -188,7 +170,7 @@ fn test_pv_hc() {
                 HALT
         "#;
 
-    let (cpu, _, _) = run_until_halt(code, 1000);
+    let (cpu, _) = run_until_halt(code, 1000);
 
     // Check result in C
     assert_eq!(
@@ -231,13 +213,13 @@ ORG 0x1000
 ; 0x1000: 0xAA, 0xBB, 0xCC
         "#;
 
-    let (_, memory, _) = run_until_halt(code, 1000);
+    let (cpu, _) = run_until_halt(code, 1000);
 
     // Check that bytes were copied to 0x2000, 0x2001, and 0x2002
     let dest_addr = 0x2000;
     let expected_data: [u8; 3] = [0xAA, 0xBB, 0xCC];
     for i in 0..3 {
-        let byte = memory.borrow().read(dest_addr + i);
+        let byte = cpu.memory.read(dest_addr + i);
         assert_eq!(
             byte,
             expected_data[i as usize],
@@ -271,7 +253,7 @@ SUB_B:
     RET           ; Returns to 'POP DE' in SUB_A
 "#;
 
-    let (cpu, _, _) = run_until_halt(code, 1000);
+    let (cpu, _) = run_until_halt(code, 1000);
 
     assert_eq!(
         cpu.get_register_pair(RegisterPair::HL),
@@ -343,7 +325,7 @@ START:
     HALT
 "#;
 
-    let (cpu, _, _) = run_until_halt(code, 5000);
+    let (cpu, _) = run_until_halt(code, 5000);
     assert_eq!(
         cpu.get_register(GPR::A),
         0x11,

@@ -2,45 +2,44 @@ use super::nmi_trigger::NmiTrigger;
 use crate::traits::IODevice;
 use crate::ui_traits::DeviceWithUi;
 use eframe::egui;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::rc::Rc;
 #[cfg(target_arch = "wasm32")]
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
 
 pub struct DeviceDefinition {
     pub menu_name: &'static str,
     pub default_port: &'static str,
-    pub create: fn(u16) -> Rc<RefCell<dyn DeviceWithUi>>,
+    pub create: fn(u16) -> Arc<Mutex<dyn DeviceWithUi>>,
 }
 
-fn create_keypad(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
-    Rc::new(RefCell::new(Keypad::new(port)))
+fn create_keypad(port: u16) -> Arc<Mutex<dyn DeviceWithUi>> {
+    Arc::new(Mutex::new(Keypad::new(port)))
 }
 
-fn create_display(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
-    Rc::new(RefCell::new(SevenSegmentDisplay::new(port)))
+fn create_display(port: u16) -> Arc<Mutex<dyn DeviceWithUi>> {
+    Arc::new(Mutex::new(SevenSegmentDisplay::new(port)))
 }
 
-fn create_lcd_display(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
-    Rc::new(RefCell::new(LcdDisplay::new(port)))
+fn create_lcd_display(port: u16) -> Arc<Mutex<dyn DeviceWithUi>> {
+    Arc::new(Mutex::new(LcdDisplay::new(port)))
 }
 
-fn create_interrupt_controller(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
-    Rc::new(RefCell::new(GenericInterruptDevice::new(port)))
+fn create_interrupt_controller(port: u16) -> Arc<Mutex<dyn DeviceWithUi>> {
+    Arc::new(Mutex::new(GenericInterruptDevice::new(port)))
 }
 
-fn create_virtual_terminal(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
-    Rc::new(RefCell::new(VirtualTerminal::new(port)))
+fn create_virtual_terminal(port: u16) -> Arc<Mutex<dyn DeviceWithUi>> {
+    Arc::new(Mutex::new(VirtualTerminal::new(port)))
 }
 
-fn create_virtual_file_system(port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
-    Rc::new(RefCell::new(VirtualDOS::new(port)))
+fn create_virtual_file_system(port: u16) -> Arc<Mutex<dyn DeviceWithUi>> {
+    Arc::new(Mutex::new(VirtualDOS::new(port)))
 }
 
-fn create_nmi_trigger(_port: u16) -> Rc<RefCell<dyn DeviceWithUi>> {
-    Rc::new(RefCell::new(NmiTrigger::new()))
+fn create_nmi_trigger(_port: u16) -> Arc<Mutex<dyn DeviceWithUi>> {
+    Arc::new(Mutex::new(NmiTrigger::new()))
 }
 
 pub fn device_definitions() -> &'static [DeviceDefinition] {

@@ -1,5 +1,3 @@
-use std::{cell::RefCell, rc::Rc};
-
 use crate::{cpu::Z80A, traits::MemoryMapper};
 
 pub mod alu_tests;
@@ -33,8 +31,7 @@ impl MemoryMapper for MockMemory {
 }
 
 fn setup_cpu() -> Z80A {
-    let memory = Rc::new(RefCell::new(MockMemory::new())) as Rc<RefCell<dyn MemoryMapper>>;
-    Z80A::new(memory)
+    Z80A::new(MockMemory::new())
 }
 
 #[test]

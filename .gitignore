@@ -8,3 +8,4 @@ CHANGELOG.md
 .sccignore
 debtmap-report.json
 debtmap-report.md
+.ua/

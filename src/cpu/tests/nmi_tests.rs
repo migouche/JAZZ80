@@ -30,8 +30,8 @@ fn test_nmi_basic() {
     assert_eq!(cpu.pc, 0x0066);
     // Old PC (0x1000) should be on stack
     let sp = cpu.sp;
-    let ret_addr_low = cpu.memory.borrow().read(sp);
-    let ret_addr_high = cpu.memory.borrow().read(sp.wrapping_add(1));
+    let ret_addr_low = cpu.memory.read(sp);
+    let ret_addr_high = cpu.memory.read(sp.wrapping_add(1));
     let ret_addr = u16::from_le_bytes([ret_addr_low, ret_addr_high]);
 
     assert_eq!(ret_addr, 0x1000);
@@ -87,8 +87,8 @@ fn test_retn_restores_iff1() {
 
     // Execute RETN (ED 45)
     // Write RETN at 0x0066
-    cpu.memory.borrow_mut().write(0x0066, 0xED);
-    cpu.memory.borrow_mut().write(0x0067, 0x45);
+    cpu.memory.write(0x0066, 0xED);
+    cpu.memory.write(0x0067, 0x45);
 
     cpu.tick(); // Fetch and execute RETN
 
@@ -117,8 +117,8 @@ fn test_retn_restores_iff1_disabled() {
     assert!(!cpu.iff2);
 
     // Execute RETN (ED 45) at 0x0066
-    cpu.memory.borrow_mut().write(0x0066, 0xED);
-    cpu.memory.borrow_mut().write(0x0067, 0x45);
+    cpu.memory.write(0x0066, 0xED);
+    cpu.memory.write(0x0067, 0x45);
 
     cpu.tick();
 
