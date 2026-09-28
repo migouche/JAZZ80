@@ -5,7 +5,6 @@ use crate::cpu::{Flag, GPR, Z80A};
 use crate::traits::SynchronousComponent;
 use std::collections::HashSet;
 
-
 pub struct Machine {
     pub cpu: Z80A,
 }
