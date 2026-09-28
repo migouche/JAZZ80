@@ -207,7 +207,12 @@ impl ExecutionState {
         }
     }
 
-    pub fn sync_breakpoints(&mut self, line_to_address: &HashMap<usize, u16>, active_tab: usize, tabs: &[EditorTab]) {
+    pub fn sync_breakpoints(
+        &mut self,
+        line_to_address: &HashMap<usize, u16>,
+        active_tab: usize,
+        tabs: &[EditorTab],
+    ) {
         let mut addrs = HashSet::new();
         if let Some(tab) = tabs.get(active_tab) {
             for &line in &tab.breakpoints {
@@ -539,7 +544,8 @@ START:
         let changed = addrs != self.exec.breakpoint_addrs;
         self.exec.breakpoint_addrs = addrs;
         if changed && self.exec.is_running {
-            self.exec.runner
+            self.exec
+                .runner
                 .send_command(Command::SetBreakpoints(self.exec.breakpoint_addrs.clone()));
         }
     }
@@ -548,7 +554,9 @@ START:
         let machine = self.exec.machine.take().unwrap_or_default();
         self.exec.is_running = true;
         self.exec.last_stop_reason = None;
-        self.exec.runner.start(machine, self.exec.breakpoint_addrs.clone());
+        self.exec
+            .runner
+            .start(machine, self.exec.breakpoint_addrs.clone());
     }
 
     fn stop_execution(&mut self) {
@@ -559,8 +567,6 @@ START:
         self.exec.is_running = false;
         self.refresh_snapshot();
     }
-
-
 
     fn save_to_storage(&self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
         if let Some(storage) = storage {
@@ -2601,6 +2607,7 @@ impl eframe::App for Z80App {
         // Draw separate windows for devices
         self.show_device_windows(&ctx);
 
-        self.exec.sync_breakpoints(&self.line_to_address, self.active_tab, &self.tabs);
+        self.exec
+            .sync_breakpoints(&self.line_to_address, self.active_tab, &self.tabs);
     }
 }
