@@ -1,7 +1,7 @@
 use crate::assembler::{AssemblyLine, Symbol, SymbolType, assemble_binary, assemble_with_metadata};
 use crate::cpu::{Flag, GPR};
 use crate::emulator::{Machine, MachineSnapshot};
-use crate::gui::exec::{Command, Event, Runner, StopReason};
+use crate::gui::exec::{Command, Event, Runner, RunnerImpl, StopReason};
 use crate::traits::SynchronousComponent;
 use eframe::egui::{self, TextBuffer};
 use std::collections::{HashMap, HashSet};
@@ -90,13 +90,7 @@ pub struct EditorTab {
 #[serde(default)]
 pub struct Z80App {
     #[serde(skip)]
-    machine: Option<Machine>,
-    #[serde(skip)]
-    snapshot: MachineSnapshot,
-    #[serde(skip)]
-    runner: Runner,
-    #[serde(skip)]
-    breakpoint_addrs: HashSet<u16>,
+    exec: ExecutionState,
 
     tabs: Vec<EditorTab>,
     active_tab: usize,
@@ -115,10 +109,6 @@ pub struct Z80App {
     #[serde(default)]
     symbol_display_prefs: HashMap<String, SymbolDisplayFormat>,
 
-    #[serde(skip)]
-    is_running: bool,
-    #[serde(skip)]
-    last_stop_reason: Option<StopReason>,
     #[serde(skip)]
     pending_modal: Option<ModalType>,
     #[serde(skip)]
@@ -153,11 +143,132 @@ pub struct Z80App {
     is_assembly_stale: bool,
 }
 
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct ExecutionState {
+    #[serde(skip)]
+    machine: Option<Machine>,
+    #[serde(skip)]
+    snapshot: MachineSnapshot,
+    #[serde(skip)]
+    runner: RunnerImpl,
+    #[serde(skip)]
+    breakpoint_addrs: HashSet<u16>,
+    #[serde(skip)]
+    is_running: bool,
+    #[serde(skip)]
+    last_stop_reason: Option<StopReason>,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 const APP_ID: &str = "jazz80-simulator";
 #[cfg(not(target_arch = "wasm32"))]
 const APP_NAME: &str = "JAZZ80 - Z80 Simulator";
 const STORAGE_KEY: &str = "z80_workspace";
+
+#[allow(dead_code)]
+impl ExecutionState {
+    pub fn new() -> Self {
+        Self {
+            machine: Some(Machine::new()),
+            snapshot: MachineSnapshot::default(),
+            runner: crate::gui::exec::create_runner(),
+            breakpoint_addrs: HashSet::new(),
+            is_running: false,
+            last_stop_reason: None,
+        }
+    }
+
+    pub fn edit_cpu<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut Machine) -> R,
+    {
+        if let Some(machine) = self.machine.as_mut() {
+            let result = f(machine);
+            self.refresh_snapshot();
+            result
+        } else {
+            // Machine is running in the runner; we cannot edit it directly.
+            // The UI should send commands instead. This is a fallback that
+            // takes the machine back (stopping execution) and applies the edit.
+            let mut machine = self.runner.take_machine();
+            let result = f(&mut machine);
+            self.machine = Some(machine);
+            self.is_running = false;
+            self.last_stop_reason = None;
+            self.refresh_snapshot();
+            result
+        }
+    }
+
+    pub fn refresh_snapshot(&mut self) {
+        if let Some(machine) = self.machine.as_ref() {
+            self.snapshot = machine.snapshot();
+        }
+    }
+
+    pub fn sync_breakpoints(&mut self, line_to_address: &HashMap<usize, u16>, active_tab: usize, tabs: &[EditorTab]) {
+        let mut addrs = HashSet::new();
+        if let Some(tab) = tabs.get(active_tab) {
+            for &line in &tab.breakpoints {
+                if let Some(&addr) = line_to_address.get(&line) {
+                    addrs.insert(addr);
+                }
+            }
+        }
+        let changed = addrs != self.breakpoint_addrs;
+        self.breakpoint_addrs = addrs;
+        if changed && self.is_running {
+            self.runner
+                .send_command(Command::SetBreakpoints(self.breakpoint_addrs.clone()));
+        }
+    }
+
+    pub fn start_execution(&mut self) {
+        let machine = self.machine.take().unwrap_or_default();
+        self.is_running = true;
+        self.last_stop_reason = None;
+        self.runner.start(machine, self.breakpoint_addrs.clone());
+    }
+
+    pub fn stop_execution(&mut self) {
+        if self.machine.is_some() {
+            return;
+        }
+        self.machine = Some(self.runner.take_machine());
+        self.is_running = false;
+        self.refresh_snapshot();
+    }
+
+    pub fn ensure_machine_reclaimed(&mut self) {
+        if self.machine.is_none() && !self.runner.is_running() {
+            self.machine = Some(self.runner.take_machine());
+            self.refresh_snapshot();
+        }
+    }
+
+    pub fn load_and_reset(&mut self, attached_devices: &[Arc<Mutex<dyn DeviceWithUi>>]) {
+        self.machine = if self.machine.is_some() {
+            self.machine.take()
+        } else {
+            Some(self.runner.take_machine())
+        };
+        let machine = self.machine.as_mut().unwrap();
+        for device in attached_devices {
+            device.lock().unwrap().reset();
+            machine.cpu.attach_device(device.clone());
+        }
+
+        self.is_running = false;
+        self.last_stop_reason = None;
+    }
+}
+
+impl Default for ExecutionState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 fn reg_value(snapshot: &MachineSnapshot, gpr: GPR) -> u8 {
     match gpr {
@@ -290,19 +401,19 @@ START:
     }
 
     fn load_and_reset(&mut self) {
-        self.machine = if self.machine.is_some() {
-            self.machine.take()
+        self.exec.machine = if self.exec.machine.is_some() {
+            self.exec.machine.take()
         } else {
-            Some(self.runner.take_machine())
+            Some(self.exec.runner.take_machine())
         };
-        let machine = self.machine.as_mut().unwrap();
+        let machine = self.exec.machine.as_mut().unwrap();
         for device in &self.attached_devices {
             device.lock().unwrap().reset();
             machine.cpu.attach_device(device.clone());
         }
 
-        self.is_running = false;
-        self.last_stop_reason = None;
+        self.exec.is_running = false;
+        self.exec.last_stop_reason = None;
 
         if self.tabs.is_empty() {
             self.refresh_snapshot();
@@ -388,26 +499,31 @@ START:
         self.refresh_snapshot();
     }
 
-    fn with_machine<F, R>(&mut self, f: F) -> R
+    fn edit_cpu<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut Machine) -> R,
     {
-        let result = if let Some(machine) = self.machine.as_mut() {
-            f(machine)
-        } else {
-            let mut machine = self.runner.take_machine();
-            let result = f(&mut machine);
-            self.machine = Some(machine);
-            self.is_running = false;
+        if let Some(machine) = self.exec.machine.as_mut() {
+            let result = f(machine);
+            self.refresh_snapshot();
             result
-        };
-        self.refresh_snapshot();
-        result
+        } else {
+            // Machine is running in the runner; we cannot edit it directly.
+            // The UI should send commands instead. This is a fallback that
+            // takes the machine back (stopping execution) and applies the edit.
+            let mut machine = self.exec.runner.take_machine();
+            let result = f(&mut machine);
+            self.exec.machine = Some(machine);
+            self.exec.is_running = false;
+            self.exec.last_stop_reason = None;
+            self.refresh_snapshot();
+            result
+        }
     }
 
     fn refresh_snapshot(&mut self) {
-        if let Some(machine) = self.machine.as_ref() {
-            self.snapshot = machine.snapshot();
+        if let Some(machine) = self.exec.machine.as_ref() {
+            self.exec.snapshot = machine.snapshot();
         }
     }
 
@@ -420,36 +536,31 @@ START:
                 }
             }
         }
-        let changed = addrs != self.breakpoint_addrs;
-        self.breakpoint_addrs = addrs;
-        if changed && self.is_running {
-            self.runner
-                .send_command(Command::SetBreakpoints(self.breakpoint_addrs.clone()));
+        let changed = addrs != self.exec.breakpoint_addrs;
+        self.exec.breakpoint_addrs = addrs;
+        if changed && self.exec.is_running {
+            self.exec.runner
+                .send_command(Command::SetBreakpoints(self.exec.breakpoint_addrs.clone()));
         }
     }
 
     fn start_execution(&mut self) {
-        let machine = self.machine.take().unwrap_or_default();
-        self.is_running = true;
-        self.last_stop_reason = None;
-        self.runner.start(machine, self.breakpoint_addrs.clone());
+        let machine = self.exec.machine.take().unwrap_or_default();
+        self.exec.is_running = true;
+        self.exec.last_stop_reason = None;
+        self.exec.runner.start(machine, self.exec.breakpoint_addrs.clone());
     }
 
     fn stop_execution(&mut self) {
-        if self.machine.is_some() {
+        if self.exec.machine.is_some() {
             return;
         }
-        self.machine = Some(self.runner.take_machine());
-        self.is_running = false;
+        self.exec.machine = Some(self.exec.runner.take_machine());
+        self.exec.is_running = false;
         self.refresh_snapshot();
     }
 
-    fn ensure_machine_reclaimed(&mut self) {
-        if self.machine.is_none() && !self.runner.is_running() {
-            self.machine = Some(self.runner.take_machine());
-            self.refresh_snapshot();
-        }
-    }
+
 
     fn save_to_storage(&self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
         if let Some(storage) = storage {
@@ -863,7 +974,7 @@ START:
                     .and_then(|n| n.to_str())
                     .unwrap_or("program.bin")
                     .to_string();
-                self.is_running = false;
+                self.exec.is_running = false;
                 self.last_error = None;
             }
             Err(err) => {
@@ -917,12 +1028,103 @@ START:
         }
     }
 
+    fn poll_execution(&mut self, ctx: &egui::Context) {
+        if self.exec.is_running {
+            for event in self.exec.runner.poll() {
+                match event {
+                    Event::Snapshot(snapshot) => {
+                        self.exec.snapshot = snapshot;
+                    }
+                    Event::Finished(reason) => {
+                        self.exec.is_running = false;
+                        self.exec.last_stop_reason = Some(reason);
+                    }
+                }
+            }
+            if self.exec.is_running {
+                ctx.request_repaint_after(Duration::from_millis(16));
+            }
+            self.exec.ensure_machine_reclaimed();
+        }
+    }
+
+    fn show_memory_viewer(&mut self, ui: &mut egui::Ui) {
+        let mut show_mem = self.show_memory_viewer;
+        if show_mem {
+            egui::Window::new("Memory Viewer")
+                .open(&mut show_mem)
+                .resizable(true)
+                .default_width(500.0)
+                .default_height(400.0)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Start Address (Hex):");
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut self.memory_viewer_start)
+                                .desired_width(60.0)
+                                .font(egui::TextStyle::Monospace),
+                        );
+                        if ui.button("Goto PC").clicked() {
+                            self.memory_viewer_start = format!("{:04X}", self.exec.snapshot.pc);
+                            response.request_focus();
+                        }
+                    });
+
+                    ui.separator();
+
+                    let start_addr =
+                        u16::from_str_radix(self.memory_viewer_start.trim(), 16).unwrap_or(0);
+
+                    let rows = 16;
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        egui::Grid::new("mem_dump_grid")
+                            .num_columns(3)
+                            .spacing([20.0, 4.0])
+                            .show(ui, |ui| {
+                                for r in 0..rows {
+                                    let row_addr = start_addr.wrapping_add((r * 16) as u16);
+
+                                    ui.monospace(format!("{:04X}", row_addr));
+
+                                    let mut hex_str = String::new();
+                                    let mut ascii_str = String::new();
+
+                                    for c in 0..16 {
+                                        let addr = row_addr.wrapping_add(c);
+                                        let val = self.exec.snapshot.memory[addr as usize];
+                                        hex_str.push_str(&format!("{:02X} ", val));
+
+                                        if (32..=126).contains(&val) {
+                                            ascii_str.push(val as char);
+                                        } else {
+                                            ascii_str.push('.');
+                                        }
+                                    }
+
+                                    ui.monospace(hex_str);
+                                    ui.monospace(ascii_str);
+                                    ui.end_row();
+                                }
+                            });
+                    });
+                });
+            self.show_memory_viewer = show_mem;
+        }
+    }
+
+    fn show_device_windows(&mut self, ctx: &egui::Context) {
+        for device in &self.attached_devices {
+            device.lock().unwrap().draw(ctx);
+        }
+    }
+
     fn render_registers_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading("Registers");
         ui.separator();
 
-        let can_edit = !self.is_running || self.snapshot.halted;
-        let snapshot = self.snapshot.clone();
+        let can_edit = !self.exec.is_running || self.exec.snapshot.halted;
+        let snapshot = self.exec.snapshot.clone();
 
         egui::Grid::new("regs_grid")
             .striped(true)
@@ -981,25 +1183,25 @@ START:
                 }
 
                 edit_16!("PC", snapshot.pc, |v| {
-                    self.with_machine(|m| m.cpu.set_pc(v))
+                    self.edit_cpu(|m| m.cpu.set_pc(v))
                 });
                 ui.label("");
                 ui.label("");
                 ui.end_row();
                 edit_16!("SP", snapshot.sp, |v| {
-                    self.with_machine(|m| m.cpu.set_sp(v))
+                    self.edit_cpu(|m| m.cpu.set_sp(v))
                 });
                 ui.label("");
                 ui.label("");
                 ui.end_row();
                 edit_16!("IX", snapshot.ix, |v| {
-                    self.with_machine(|m| m.cpu.set_ix(v))
+                    self.edit_cpu(|m| m.cpu.set_ix(v))
                 });
                 ui.label("");
                 ui.label("");
                 ui.end_row();
                 edit_16!("IY", snapshot.iy, |v| {
-                    self.with_machine(|m| m.cpu.set_iy(v))
+                    self.edit_cpu(|m| m.cpu.set_iy(v))
                 });
                 ui.label("");
                 ui.label("");
@@ -1024,13 +1226,13 @@ START:
 
                 for (name, gpr) in regs {
                     edit_8!(name, name, reg_value(&snapshot, gpr), |v| self
-                        .with_machine(|m| m.cpu.set_register(gpr, v)));
+                        .edit_cpu(|m| m.cpu.set_register(gpr, v)));
                     let shadow_name = format!("{}'", name);
                     edit_8!(
                         shadow_name.clone(),
                         shadow_name,
                         shadow_reg_value(&snapshot, gpr),
-                        |v| self.with_machine(|m| m.cpu.set_shadow_register(gpr, v))
+                        |v| self.edit_cpu(|m| m.cpu.set_shadow_register(gpr, v))
                     );
                     ui.end_row();
                 }
@@ -1107,7 +1309,7 @@ START:
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
                     if interact_resp.clicked() {
-                        self.with_machine(|m| m.cpu.set_flag(!on, flag));
+                        self.edit_cpu(|m| m.cpu.set_flag(!on, flag));
                     }
                 }
             }
@@ -1165,19 +1367,7 @@ impl Default for Z80App {
         }
 
         Self {
-            machine: Some(Machine::new()),
-            snapshot: MachineSnapshot::default(),
-            runner: {
-                #[cfg(target_arch = "wasm32")]
-                {
-                    Runner::cooperative()
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    Runner::threaded()
-                }
-            },
-            breakpoint_addrs: HashSet::new(),
+            exec: ExecutionState::new(),
             tabs: vec![EditorTab {
                 path: None,
                 breakpoints: HashSet::new(),
@@ -1193,8 +1383,6 @@ impl Default for Z80App {
             line_to_address: HashMap::new(),
             assembly_lines: HashMap::new(),
             symbol_display_prefs: HashMap::new(),
-            is_running: false,
-            last_stop_reason: None,
             pending_modal: None,
             loaded_file_name: "Untitled".to_string(),
             code_theme: highlighting::CodeTheme::one_dark_pro_vivid(),
@@ -1245,10 +1433,6 @@ impl eframe::App for Z80App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.pending_modal = Some(ModalType::Quit);
             }
-        }
-
-        if !self.is_running {
-            self.refresh_snapshot();
         }
 
         let mut action = self.check_shortcuts(&ctx);
@@ -1439,13 +1623,17 @@ impl eframe::App for Z80App {
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
                 {
-                    self.is_running = false;
-                    self.with_machine(|m| m.cpu.tick());
+                    if self.exec.is_running {
+                        self.exec.runner.send_command(Command::Tick);
+                    } else if let Some(machine) = self.exec.machine.as_mut() {
+                        machine.cpu.tick();
+                        self.refresh_snapshot();
+                    }
                 }
 
-                let run_label = if self.is_running {
+                let run_label = if self.exec.is_running {
                     "⏸ Stop"
-                } else if self.snapshot.pc > 0 && !self.snapshot.halted {
+                } else if self.exec.snapshot.pc > 0 && !self.exec.snapshot.halted {
                     "▶ Resume"
                 } else {
                     "▶ Run"
@@ -1455,13 +1643,15 @@ impl eframe::App for Z80App {
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
                 {
-                    if self.is_running {
+                    if self.exec.is_running {
                         self.stop_execution();
                     } else {
-                        if !self.snapshot.halted
-                            && self.breakpoint_addrs.contains(&self.snapshot.pc)
+                        if !self.exec.snapshot.halted
+                            && self.exec.breakpoint_addrs.contains(&self.exec.snapshot.pc)
+                            && let Some(machine) = self.exec.machine.as_mut()
                         {
-                            self.with_machine(|m| m.cpu.tick());
+                            machine.cpu.tick();
+                            self.refresh_snapshot();
                         }
                         self.start_execution();
                     }
@@ -1474,10 +1664,11 @@ impl eframe::App for Z80App {
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
                 {
-                    if self.is_running {
-                        self.runner.send_command(Command::SetInterrupt(true));
-                    } else {
-                        self.with_machine(|m| m.cpu.set_interrupt(true));
+                    if self.exec.is_running {
+                        self.exec.runner.send_command(Command::SetInterrupt(true));
+                    } else if let Some(machine) = self.exec.machine.as_mut() {
+                        machine.cpu.set_interrupt(true);
+                        self.refresh_snapshot();
                     }
                 }
 
@@ -1486,10 +1677,11 @@ impl eframe::App for Z80App {
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
                 {
-                    if self.is_running {
-                        self.runner.send_command(Command::Nmi);
-                    } else {
-                        self.with_machine(|m| m.cpu.nmi());
+                    if self.exec.is_running {
+                        self.exec.runner.send_command(Command::Nmi);
+                    } else if let Some(machine) = self.exec.machine.as_mut() {
+                        machine.cpu.nmi();
+                        self.refresh_snapshot();
                     }
                 }
 
@@ -1497,22 +1689,23 @@ impl eframe::App for Z80App {
 
                 if let Some(err) = &self.last_error {
                     ui.colored_label(egui::Color32::RED, format!("⚠ {}", err));
-                } else if self.snapshot.halted {
+                } else if self.exec.snapshot.halted {
                     ui.colored_label(egui::Color32::RED, "HALTED");
                     if ui
                         .button("Resume")
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .clicked()
                     {
-                        if self.is_running {
-                            self.runner.send_command(Command::Resume);
-                        } else {
-                            self.with_machine(|m| m.cpu.set_halted(false));
+                        if self.exec.is_running {
+                            self.exec.runner.send_command(Command::Resume);
+                        } else if let Some(machine) = self.exec.machine.as_mut() {
+                            machine.cpu.set_halted(false);
+                            self.refresh_snapshot();
                         }
                     }
-                } else if self.is_running {
+                } else if self.exec.is_running {
                     ui.label(egui::RichText::new("Running").color(egui::Color32::GREEN));
-                } else if let Some(StopReason::Breakpoint(addr)) = self.last_stop_reason {
+                } else if let Some(StopReason::Breakpoint(addr)) = self.exec.last_stop_reason {
                     ui.colored_label(
                         egui::Color32::from_rgb(255, 180, 60),
                         format!("Stopped at breakpoint 0x{:04X}", addr),
@@ -1611,12 +1804,12 @@ impl eframe::App for Z80App {
                                         SymbolDisplayFormat::Default => {
                                             match symbol.kind {
                                                 SymbolType::Byte => {
-                                                    let val = self.snapshot.memory[addr as usize];
+                                                    let val = self.exec.snapshot.memory[addr as usize];
                                                     ui.monospace(format!("0x{:02X}", val));
                                                 }
                                                 SymbolType::Word => {
-                                                    let low = self.snapshot.memory[addr as usize];
-                                                    let high = self.snapshot.memory[addr.wrapping_add(1) as usize];
+                                                    let low = self.exec.snapshot.memory[addr as usize];
+                                                    let high = self.exec.snapshot.memory[addr.wrapping_add(1) as usize];
                                                     let val = (low as u16) | ((high as u16) << 8);
                                                     ui.monospace(format!("0x{:04X}", val));
                                                 }
@@ -1626,7 +1819,7 @@ impl eframe::App for Z80App {
                                                     // Read at most 20 chars for preview, but check for null terminator
                                                     let display_len = len.min(20);
                                                     for i in 0..display_len {
-                                                        let b = self.snapshot.memory[addr.wrapping_add(i as u16) as usize];
+                                                        let b = self.exec.snapshot.memory[addr.wrapping_add(i as u16) as usize];
                                                         if b == 0 { break; }
                                                         bytes.push(b);
                                                     }
@@ -1639,7 +1832,7 @@ impl eframe::App for Z80App {
                                                         // Read full content for tooltip
                                                         let mut full_bytes = Vec::new();
                                                         for i in 0..len {
-                                                            let b = self.snapshot.memory[addr.wrapping_add(i as u16) as usize];
+                                                            let b = self.exec.snapshot.memory[addr.wrapping_add(i as u16) as usize];
                                                             if b == 0 { break; }
                                                             full_bytes.push(b);
                                                         }
@@ -1662,14 +1855,14 @@ impl eframe::App for Z80App {
                                                     let mut bytes = Vec::new();
                                                     let display_len = len.min(8);
                                                     for i in 0..display_len {
-                                                        bytes.push(self.snapshot.memory[addr.wrapping_add(i as u16) as usize]);
+                                                        bytes.push(self.exec.snapshot.memory[addr.wrapping_add(i as u16) as usize]);
                                                     }
                                                     let hex_str: Vec<String> = bytes.iter().map(|b| format!("{:02X}", b)).collect();
                                                     if len > 8 {
                                                         // Read full content for tooltip
                                                         let mut full_bytes = Vec::new();
                                                         for i in 0..len {
-                                                            full_bytes.push(self.snapshot.memory[addr.wrapping_add(i as u16) as usize]);
+                                                            full_bytes.push(self.exec.snapshot.memory[addr.wrapping_add(i as u16) as usize]);
                                                         }
                                                         let full_hex: Vec<String> = full_bytes.iter().map(|b| format!("{:02X}", b)).collect();
 
@@ -1694,7 +1887,7 @@ impl eframe::App for Z80App {
 
                                             let mut bytes = Vec::new();
                                             for i in 0..display_limit {
-                                                let b = self.snapshot.memory[addr.wrapping_add(i as u16) as usize];
+                                                let b = self.exec.snapshot.memory[addr.wrapping_add(i as u16) as usize];
                                                 if b == 0 { break; }
                                                 bytes.push(b);
                                             }
@@ -1715,7 +1908,7 @@ impl eframe::App for Z80App {
                                                  let mut full_bytes = Vec::new();
                                                  // Scan up to max_scan_len (which is allocated length)
                                                  for i in 0..max_scan_len {
-                                                     let b = self.snapshot.memory[addr.wrapping_add(i as u16) as usize];
+                                                     let b = self.exec.snapshot.memory[addr.wrapping_add(i as u16) as usize];
                                                      if b == 0 { break; }
                                                      full_bytes.push(b);
                                                  }
@@ -1742,13 +1935,13 @@ impl eframe::App for Z80App {
                                             let mut bytes = Vec::new();
                                             let display_len = len.clamp(1, 8); // At least 1 byte
                                             for i in 0..display_len {
-                                                bytes.push(self.snapshot.memory[addr.wrapping_add(i as u16) as usize]);
+                                                bytes.push(self.exec.snapshot.memory[addr.wrapping_add(i as u16) as usize]);
                                             }
                                             let hex_str: Vec<String> = bytes.iter().map(|b| format!("{:02X}", b)).collect();
                                             if len > 8 {
                                                  let mut full_bytes = Vec::new();
                                                  for i in 0..len {
-                                                     full_bytes.push(self.snapshot.memory[addr.wrapping_add(i as u16) as usize]);
+                                                     full_bytes.push(self.exec.snapshot.memory[addr.wrapping_add(i as u16) as usize]);
                                                  }
                                                  let full_hex: Vec<String> = full_bytes.iter().map(|b| format!("{:02X}", b)).collect();
                                                 ui.monospace(format!("[{}...]", hex_str.join(" ")))
@@ -1768,7 +1961,7 @@ impl eframe::App for Z80App {
                                             let word_count = len / 2;
                                             if word_count == 0 {
                                                  // Fallback for single byte if forced?
-                                                 let val = self.snapshot.memory[addr as usize];
+                                                 let val = self.exec.snapshot.memory[addr as usize];
                                                  ui.monospace(format!("[00{:02X}:inv]", val))
                                                     .on_hover_text("Odd length, cannot display as words correctly");
                                             } else {
@@ -1776,16 +1969,16 @@ impl eframe::App for Z80App {
                                                 let display_count = word_count.min(4);
                                                 for i in 0..display_count {
                                                     let offset = (i * 2) as u16;
-                                                    let low = self.snapshot.memory[addr.wrapping_add(offset) as usize];
-                                                    let high = self.snapshot.memory[addr.wrapping_add(offset + 1) as usize];
+                                                    let low = self.exec.snapshot.memory[addr.wrapping_add(offset) as usize];
+                                                    let high = self.exec.snapshot.memory[addr.wrapping_add(offset + 1) as usize];
                                                     words.push(format!("{:04X}", (low as u16) | ((high as u16) << 8)));
                                                 }
                                                 if word_count > 4 {
                                                      let mut full_words = Vec::new();
                                                      for i in 0..word_count {
                                                          let offset = (i * 2) as u16;
-                                                         let low = self.snapshot.memory[addr.wrapping_add(offset) as usize];
-                                                         let high = self.snapshot.memory[addr.wrapping_add(offset + 1) as usize];
+                                                         let low = self.exec.snapshot.memory[addr.wrapping_add(offset) as usize];
+                                                         let high = self.exec.snapshot.memory[addr.wrapping_add(offset + 1) as usize];
                                                          full_words.push(format!("{:04X}", (low as u16) | ((high as u16) << 8)));
                                                      }
                                                     ui.monospace(format!("[{}...]", words.join(" ")))
@@ -2155,9 +2348,9 @@ impl eframe::App for Z80App {
                             // Add a matching header so the text edit component starts exactly on the same row!
                             ui.label(egui::RichText::new("Code").font(font_id.clone()).strong().color(egui::Color32::GRAY));
 
-                            let highlight_line = if !self.is_running || self.snapshot.halted {
-                                let pc = self.snapshot.pc;
-                                if self.snapshot.halted {
+                            let highlight_line = if !self.exec.is_running || self.exec.snapshot.halted {
+                                let pc = self.exec.snapshot.pc;
+                                if self.exec.snapshot.halted {
                                     let mut best_match = None;
                                     let mut max_addr = -1i32;
 
@@ -2257,7 +2450,9 @@ impl eframe::App for Z80App {
                                     match port_res {
                                         Ok(port) => {
                                             let dev = (definition.create)(port);
-                                            self.with_machine(|m| m.cpu.attach_device(dev.clone()));
+                                            if let Some(machine) = self.exec.machine.as_mut() {
+                                                machine.cpu.attach_device(dev.clone());
+                                            }
                                             self.attached_devices.push(dev);
                                             should_close_modal = true;
                                         }
@@ -2397,97 +2592,15 @@ impl eframe::App for Z80App {
             }
         }
 
-        if self.is_running {
-            for event in self.runner.poll() {
-                match event {
-                    Event::Snapshot(snapshot) => {
-                        self.snapshot = snapshot;
-                    }
-                    Event::Finished(reason) => {
-                        self.is_running = false;
-                        self.last_stop_reason = Some(reason);
-                    }
-                }
-            }
-            if self.is_running {
-                ctx.request_repaint_after(Duration::from_millis(16));
-            }
-            self.ensure_machine_reclaimed();
-        }
+        // Poll execution events from the runner
+        self.poll_execution(&ctx);
 
         // Draw Memory Viewer Window
-        let mut show_mem = self.show_memory_viewer;
-        if show_mem {
-            egui::Window::new("Memory Viewer")
-                .open(&mut show_mem)
-                .resizable(true)
-                .default_width(500.0)
-                .default_height(400.0)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Start Address (Hex):");
-                        let response = ui.add(
-                            egui::TextEdit::singleline(&mut self.memory_viewer_start)
-                                .desired_width(60.0)
-                                .font(egui::TextStyle::Monospace),
-                        );
-                        if ui.button("Goto PC").clicked() {
-                            self.memory_viewer_start = format!("{:04X}", self.snapshot.pc);
-                            response.request_focus();
-                        }
-                    });
-
-                    ui.separator();
-
-                    let start_addr =
-                        u16::from_str_radix(self.memory_viewer_start.trim(), 16).unwrap_or(0);
-
-                    // We render 16 rows of 16 bytes for a classic Hex Dump
-                    let rows = 16;
-
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        egui::Grid::new("mem_dump_grid")
-                            .num_columns(3)
-                            .spacing([20.0, 4.0])
-                            .show(ui, |ui| {
-                                for r in 0..rows {
-                                    let row_addr = start_addr.wrapping_add((r * 16) as u16);
-
-                                    // Print Address
-                                    ui.monospace(format!("{:04X}", row_addr));
-
-                                    // Print Hex Bytes
-                                    let mut hex_str = String::new();
-                                    let mut ascii_str = String::new();
-
-                                    for c in 0..16 {
-                                        let addr = row_addr.wrapping_add(c);
-                                        let val = self.snapshot.memory[addr as usize];
-                                        hex_str.push_str(&format!("{:02X} ", val));
-
-                                        // Ascii representation
-                                        if (32..=126).contains(&val) {
-                                            ascii_str.push(val as char);
-                                        } else {
-                                            ascii_str.push('.');
-                                        }
-                                    }
-
-                                    ui.monospace(hex_str);
-                                    ui.monospace(ascii_str);
-                                    ui.end_row();
-                                }
-                            });
-                    });
-                });
-            self.show_memory_viewer = show_mem;
-        }
+        self.show_memory_viewer(ui);
 
         // Draw separate windows for devices
-        for device in &self.attached_devices {
-            device.lock().unwrap().draw(&ctx);
-        }
+        self.show_device_windows(&ctx);
 
-        self.sync_breakpoints();
+        self.exec.sync_breakpoints(&self.line_to_address, self.active_tab, &self.tabs);
     }
 }

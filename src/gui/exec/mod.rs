@@ -1,3 +1,5 @@
+#![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
+
 pub mod cooperative;
 pub mod threaded;
 
@@ -15,7 +17,26 @@ pub enum Command {
     SetInterrupt(bool),
     SetBreakpoints(HashSet<u16>),
     Resume,
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     Stop,
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    SetPC(u16),
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    SetSP(u16),
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    SetIX(u16),
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    SetIY(u16),
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    SetRegister(crate::cpu::GPR, u8),
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    SetShadowRegister(crate::cpu::GPR, u8),
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    SetFlag(crate::cpu::Flag, bool),
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    Tick,
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    SetHalted(bool),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,62 +51,28 @@ pub enum Event {
     Finished(StopReason),
 }
 
-pub enum Runner {
-    Threaded(threaded::Threaded),
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    Cooperative(cooperative::Cooperative),
+pub trait Runner {
+    fn start(&mut self, machine: Machine, breakpoints: HashSet<u16>);
+    fn poll(&mut self) -> Vec<Event>;
+    fn send_command(&mut self, command: Command);
+    fn take_machine(&mut self) -> Machine;
+    fn is_running(&self) -> bool;
 }
 
-impl Runner {
-    pub fn threaded() -> Self {
-        Runner::Threaded(threaded::Threaded::new())
-    }
+#[cfg(not(target_arch = "wasm32"))]
+pub type RunnerImpl = threaded::Threaded;
 
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    pub fn cooperative() -> Self {
-        Runner::Cooperative(cooperative::Cooperative::new())
-    }
+#[cfg(target_arch = "wasm32")]
+pub type RunnerImpl = cooperative::Cooperative;
 
-    pub fn start(&mut self, machine: Machine, breakpoints: HashSet<u16>) {
-        match self {
-            Runner::Threaded(r) => r.start(machine, breakpoints),
-            Runner::Cooperative(r) => r.start(machine, breakpoints),
-        }
-    }
-
-    pub fn poll(&mut self) -> Vec<Event> {
-        match self {
-            Runner::Threaded(r) => r.poll(),
-            Runner::Cooperative(r) => r.poll(),
-        }
-    }
-
-    pub fn send_command(&mut self, command: Command) {
-        match self {
-            Runner::Threaded(r) => r.send_command(command),
-            Runner::Cooperative(r) => r.send_command(command),
-        }
-    }
-
-    pub fn take_machine(&mut self) -> Machine {
-        match self {
-            Runner::Threaded(r) => r.take_machine(),
-            Runner::Cooperative(r) => r.take_machine(),
-        }
-    }
-
-    pub fn is_running(&self) -> bool {
-        match self {
-            Runner::Threaded(r) => r.is_running(),
-            Runner::Cooperative(r) => r.is_running(),
-        }
-    }
+#[cfg(not(target_arch = "wasm32"))]
+pub fn create_runner() -> RunnerImpl {
+    threaded::Threaded::new()
 }
 
-impl Default for Runner {
-    fn default() -> Self {
-        Runner::threaded()
-    }
+#[cfg(target_arch = "wasm32")]
+pub fn create_runner() -> RunnerImpl {
+    cooperative::Cooperative::new()
 }
 
 #[cfg(test)]

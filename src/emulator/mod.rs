@@ -1,7 +1,10 @@
+#![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
+
 use crate::components::memories::mem_64k::Mem64k;
 use crate::cpu::{Flag, GPR, Z80A};
 use crate::traits::SynchronousComponent;
 use std::collections::HashSet;
+
 
 pub struct Machine {
     pub cpu: Z80A,
@@ -45,10 +48,22 @@ impl Machine {
             shadow_regs[i] = self.cpu.get_shadow_register(*gpr);
         }
 
+        // Only copy dirty memory addresses to avoid 64KB copy per snapshot
         let mut memory = vec![0u8; 0x10000];
-        for (addr, byte) in memory.iter_mut().enumerate() {
-            *byte = self.cpu.memory.read(addr as u16);
+        let dirty = self.cpu.memory.get_dirty();
+        if let Some(dirty) = &dirty {
+            for (addr, byte) in memory.iter_mut().enumerate() {
+                if dirty[addr] {
+                    *byte = self.cpu.memory.read(addr as u16);
+                }
+            }
+        } else {
+            for (addr, byte) in memory.iter_mut().enumerate() {
+                *byte = self.cpu.memory.read(addr as u16);
+            }
         }
+        // Clear dirty flags after snapshot
+        self.cpu.memory.clear_dirty();
 
         MachineSnapshot {
             pc: self.cpu.get_pc(),

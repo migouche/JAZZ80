@@ -16,6 +16,12 @@ pub trait MemoryMapper: Send {
         self.write(address, (data & 0xFF) as u8);
         self.write(address.overflowing_add(1).0, (data >> 8) as u8);
     }
+
+    fn get_dirty(&self) -> Option<Vec<bool>> {
+        None
+    }
+
+    fn clear_dirty(&self) {}
 }
 
 pub trait IODevice: Send {

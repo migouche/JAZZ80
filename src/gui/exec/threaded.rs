@@ -1,5 +1,8 @@
-use super::{Command, Event, Machine, SLICE_TICKS, SNAPSHOT_INTERVAL, StopReason};
+#![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+
+use super::{Command, Event, Machine, Runner, SLICE_TICKS, SNAPSHOT_INTERVAL, StopReason};
 use crate::emulator::SliceResult;
+use crate::traits::SynchronousComponent;
 use std::collections::HashSet;
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::thread::JoinHandle;
@@ -24,8 +27,10 @@ impl Threaded {
     pub fn new() -> Self {
         Self { active: None }
     }
+}
 
-    pub fn start(&mut self, machine: Machine, breakpoints: HashSet<u16>) {
+impl Runner for Threaded {
+    fn start(&mut self, machine: Machine, breakpoints: HashSet<u16>) {
         assert!(self.active.is_none(), "runner already running");
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::sync_channel(EVENT_CHANNEL_CAPACITY);
@@ -41,32 +46,40 @@ impl Threaded {
         });
     }
 
-    pub fn poll(&mut self) -> Vec<Event> {
+    fn poll(&mut self) -> Vec<Event> {
         let Some(active) = &self.active else {
             return Vec::new();
         };
         active.event_rx.try_iter().collect()
     }
 
-    pub fn send_command(&mut self, command: Command) {
+    fn send_command(&mut self, command: Command) {
         if let Some(active) = &self.active {
             let _ = active.cmd_tx.send(command);
         }
     }
 
-    pub fn take_machine(&mut self) -> Machine {
+    fn take_machine(&mut self) -> Machine {
         let Some(active) = self.active.take() else {
             return Machine::new();
         };
         let _ = active.cmd_tx.send(Command::Stop);
-        let _ = active.handle.join();
-        active
-            .machine_rx
-            .try_recv()
-            .unwrap_or_else(|_| Machine::new())
+        // Wait for the machine with a timeout to avoid blocking the UI thread
+        // indefinitely if the worker is in the middle of a long slice.
+        match active.machine_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(machine) => machine,
+            Err(_) => {
+                // Timeout or channel closed; try to join the thread
+                let _ = active.handle.join();
+                active
+                    .machine_rx
+                    .try_recv()
+                    .unwrap_or_else(|_| Machine::new())
+            }
+        }
     }
 
-    pub fn is_running(&self) -> bool {
+    fn is_running(&self) -> bool {
         self.active
             .as_ref()
             .map(|a| !a.handle.is_finished())
@@ -97,6 +110,15 @@ fn worker_loop(
                 Command::SetBreakpoints(bp) => breakpoints = bp,
                 Command::Resume => machine.cpu.set_halted(false),
                 Command::Stop => stop = true,
+                Command::SetPC(v) => machine.cpu.set_pc(v),
+                Command::SetSP(v) => machine.cpu.set_sp(v),
+                Command::SetIX(v) => machine.cpu.set_ix(v),
+                Command::SetIY(v) => machine.cpu.set_iy(v),
+                Command::SetRegister(r, v) => machine.cpu.set_register(r, v),
+                Command::SetShadowRegister(r, v) => machine.cpu.set_shadow_register(r, v),
+                Command::SetFlag(f, v) => machine.cpu.set_flag(v, f),
+                Command::Tick => machine.cpu.tick(),
+                Command::SetHalted(v) => machine.cpu.set_halted(v),
             }
         }
         if stop {

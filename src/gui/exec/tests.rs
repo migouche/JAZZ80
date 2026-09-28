@@ -1,5 +1,7 @@
 use super::*;
 use crate::cpu::{GPR, Z80A};
+use crate::gui::exec::cooperative::Cooperative;
+use crate::gui::exec::threaded::Threaded;
 use std::time::Instant;
 
 fn machine_with(bytes: &[u8]) -> Machine {
@@ -10,7 +12,7 @@ fn machine_with(bytes: &[u8]) -> Machine {
     Machine { cpu }
 }
 
-fn drain_until_finished(runner: &mut Runner, max: Duration) -> Event {
+fn drain_until_finished<R: Runner>(runner: &mut R, max: Duration) -> Event {
     let deadline = Instant::now() + max;
     loop {
         for event in runner.poll() {
@@ -29,7 +31,7 @@ fn threaded_hits_breakpoint_and_returns_machine() {
     let mut breakpoints = HashSet::new();
     breakpoints.insert(0x0002);
 
-    let mut runner = Runner::threaded();
+    let mut runner = Threaded::new();
     runner.start(machine, breakpoints);
 
     match drain_until_finished(&mut runner, Duration::from_secs(5)) {
@@ -48,7 +50,7 @@ fn threaded_stop_reclaims_machine() {
     let machine = machine_with(&[0x3E, 0x42]);
     let breakpoints = HashSet::new();
 
-    let mut runner = Runner::threaded();
+    let mut runner = Threaded::new();
     runner.start(machine, breakpoints);
     std::thread::sleep(Duration::from_millis(50));
     assert!(runner.is_running());
@@ -61,7 +63,7 @@ fn threaded_stop_reclaims_machine() {
 #[test]
 fn threaded_delivers_snapshots_while_running() {
     let machine = machine_with(&[0x3E, 0x42]);
-    let mut runner = Runner::threaded();
+    let mut runner = Threaded::new();
     runner.start(machine, HashSet::new());
 
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -87,7 +89,7 @@ fn threaded_nmi_command_wakes_halted_cpu() {
     // running instead of re-executing the HALT after wrapping around memory.
     let mut machine = machine_with(&[0x76, 0xC3, 0x01, 0x00]);
     machine.cpu.memory.write(0x0066, 0xC9);
-    let mut runner = Runner::threaded();
+    let mut runner = Threaded::new();
     runner.start(machine, HashSet::new());
 
     std::thread::sleep(Duration::from_millis(40));
@@ -104,7 +106,7 @@ fn cooperative_hits_breakpoint_and_returns_machine() {
     let mut breakpoints = HashSet::new();
     breakpoints.insert(0x0002);
 
-    let mut runner = Runner::cooperative();
+    let mut runner = Cooperative::new();
     runner.start(machine, breakpoints);
 
     let mut saw = false;
@@ -130,7 +132,7 @@ fn cooperative_hits_breakpoint_and_returns_machine() {
 fn cooperative_stop_and_commands() {
     let machine = machine_with(&[0x76]);
 
-    let mut runner = Runner::cooperative();
+    let mut runner = Cooperative::new();
     runner.start(machine, HashSet::new());
 
     let _ = runner.poll();
