@@ -73,6 +73,8 @@ Add an **NMI Trigger** and a **Display**. The NMI Trigger does not use an I/O po
 
 Provides a small interactive monitor backed by JAZZ80's virtual terminal and virtual filesystem. It starts at `0x0000`, prints a prompt, reads a command line, and supports:
 
+> **Note:** A full guide on how to use the OS, its commands, and how to write and run your own programs is available in [`how-to-os.md`](./how-to-os.md).
+
 | Command | Action |
 | --- | --- |
 | `HELP` | Lists the available commands. |
