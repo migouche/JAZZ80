@@ -315,13 +315,30 @@ fn snapshot_flag(snapshot: &MachineSnapshot, flag: Flag) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+const LOGO_PNG: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/logo.png"));
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run() -> eframe::Result<()> {
+    let image = image::load_from_memory(LOGO_PNG)
+        .expect("Failed to load application logo")
+        .into_rgba8();
+
+    let (width, height) = image.dimensions();
+
+    let icon = egui::IconData {
+        rgba: image.into_raw(),
+        width,
+        height,
+    };
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_app_id(APP_ID)
-            .with_inner_size([1280.0, 720.0]),
+            .with_inner_size([1280.0, 720.0])
+            .with_icon(icon),
         ..Default::default()
     };
+
     eframe::run_native(
         APP_NAME,
         options,

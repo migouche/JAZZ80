@@ -4,6 +4,14 @@
   <img src="https://capsule-render.vercel.app/api?type=waving&color=0:1a0033,50:5a189a,100:9d4edd&height=180&section=header&text=JAZZ80&fontSize=60&fontColor=e0aaff&animation=fadeIn&fontAlignY=35&desc=Just%20Another%20Zilog%20Z80&descSize=20&descAlignY=55&descColor=c77dff" alt="JAZZ80 banner" />
 </p>
 
+<div align="center">
+  <a href="docs/logo.svg">
+    <img src="docs/logo.svg" alt="JAZZ80 logo" width="400" />
+  </a>
+
+  Logo made by my wonderful girlfriend, [Gea Kristek](https://www.linkedin.com/in/gea-kristek-b396b7327/).
+</div>
+
 </div>
 
 ### *Just Another Zilog Z80*

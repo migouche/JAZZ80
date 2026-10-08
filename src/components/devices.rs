@@ -660,6 +660,8 @@ pub struct VirtualDOS {
     new_directory: String,
     #[cfg(target_arch = "wasm32")]
     upload_receiver: Option<Receiver<(String, Vec<u8>)>>,
+    #[cfg(target_arch = "wasm32")]
+    show_upload_menu: bool,
 }
 
 impl VirtualDOS {
@@ -679,6 +681,8 @@ impl VirtualDOS {
             new_directory: String::new(),
             #[cfg(target_arch = "wasm32")]
             upload_receiver: None,
+            #[cfg(target_arch = "wasm32")]
+            show_upload_menu: false,
         }
     }
 
@@ -938,7 +942,11 @@ impl DeviceWithUi for VirtualDOS {
         }
 
         let mut open = self.is_open;
+
+        #[cfg(not(target_arch = "wasm32"))]
         let mut upload_requested = false;
+        #[cfg(target_arch = "wasm32")]
+        let upload_requested = false;
         egui::Window::new(self.get_name())
             .open(&mut open)
             .min_width(420.0)
@@ -953,8 +961,17 @@ impl DeviceWithUi for VirtualDOS {
                             .to_string();
                     }
                     ui.monospace(self.gui_cwd.to_string());
-                    if ui.button("Upload file...").clicked() {
-                        upload_requested = true;
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        if ui.button("Upload file...").clicked() {
+                            self.show_upload_menu = true;
+                        }
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        if ui.button("Upload file...").clicked() {
+                            upload_requested = true;
+                        }
                     }
                 });
                 ui.separator();
@@ -991,6 +1008,42 @@ impl DeviceWithUi for VirtualDOS {
         if upload_requested {
             self.upload_file();
         }
+
+        #[cfg(target_arch = "wasm32")]
+        if self.show_upload_menu {
+            let mut menu_open = true;
+            egui::Window::new("Upload file")
+                .open(&mut menu_open)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label("Choose a bundled example or upload from your computer:");
+                    ui.separator();
+
+                    if let Some(example_files) = crate::examples::get_example_files() {
+                        for (name, contents) in &example_files {
+                            if ui.button(name).clicked() {
+                                let path = self.child_path(name);
+                                self.fs.insert(path, Inode::File(contents.clone()));
+                                self.show_upload_menu = false;
+                            }
+                        }
+                    }
+
+                    ui.separator();
+                    if ui.button("Upload from computer...").clicked() {
+                        self.show_upload_menu = false;
+                        self.upload_file();
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.show_upload_menu = false;
+                    }
+                });
+            if !menu_open {
+                self.show_upload_menu = false;
+            }
+        }
+
         self.is_open = open;
     }
 }
