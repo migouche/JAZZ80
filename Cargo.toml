@@ -1,6 +1,6 @@
 [package]
 name = "JAZZ80"
-version = "0.5.2"
+version = "0.5.4"
 edition = "2024"
 resolver = "3"
 
@@ -23,7 +23,8 @@ console_error_panic_hook = "0.1.7"
 tracing-wasm = "0.2.1"
 eframe = { version = "0.36.2", features = ["persistence", "default_fonts", "glow"] }
 wasm-bindgen = "0.2.129"
-web-sys = { version = "0.3.106", features = ["HtmlCanvasElement", "Window", "Document", "Element"] }
+web-sys = { version = "0.3.106", features = ["HtmlCanvasElement", "Window", "Document", "Element", "HtmlElement"] }
+js-sys = "0.3.106"
 reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
 
 [dev-dependencies]
