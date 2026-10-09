@@ -1,7 +1,7 @@
 use crate::assembler::{AssemblyLine, Symbol, SymbolType, assemble_binary, assemble_with_metadata};
 use crate::cpu::{Flag, GPR};
 use crate::emulator::{Machine, MachineSnapshot};
-use crate::gui::exec::{Command, Event, Runner, RunnerImpl, StopReason};
+use crate::gui::exec::{Command, Event, Runner, RunnerImpl};
 use crate::traits::SynchronousComponent;
 use eframe::egui::{self, TextBuffer};
 use std::collections::{HashMap, HashSet};
@@ -157,7 +157,7 @@ pub struct ExecutionState {
     #[serde(skip)]
     is_running: bool,
     #[serde(skip)]
-    last_stop_reason: Option<StopReason>,
+    last_stop_addr: Option<u16>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -174,7 +174,7 @@ impl ExecutionState {
             runner: crate::gui::exec::create_runner(),
             breakpoint_addrs: HashSet::new(),
             is_running: false,
-            last_stop_reason: None,
+            last_stop_addr: None,
         }
     }
 
@@ -380,7 +380,7 @@ START:
         }
 
         self.exec.is_running = false;
-        self.exec.last_stop_reason = None;
+        self.exec.last_stop_addr = None;
 
         if self.tabs.is_empty() {
             self.refresh_snapshot();
@@ -482,7 +482,7 @@ START:
             let result = f(&mut machine);
             self.exec.machine = Some(machine);
             self.exec.is_running = false;
-            self.exec.last_stop_reason = None;
+            self.exec.last_stop_addr = None;
             self.refresh_snapshot();
             result
         }
@@ -515,7 +515,7 @@ START:
     fn start_execution(&mut self) {
         let machine = self.exec.machine.take().unwrap_or_default();
         self.exec.is_running = true;
-        self.exec.last_stop_reason = None;
+        self.exec.last_stop_addr = None;
         self.exec
             .runner
             .start(machine, self.exec.breakpoint_addrs.clone());
@@ -1003,9 +1003,9 @@ START:
                     Event::Snapshot(snapshot) => {
                         self.exec.snapshot = snapshot;
                     }
-                    Event::Finished(reason) => {
+                    Event::Finished(addr) => {
                         self.exec.is_running = false;
-                        self.exec.last_stop_reason = Some(reason);
+                        self.exec.last_stop_addr = Some(addr);
                     }
                 }
             }
@@ -1673,7 +1673,7 @@ impl eframe::App for Z80App {
                     }
                 } else if self.exec.is_running {
                     ui.label(egui::RichText::new("Running").color(egui::Color32::GREEN));
-                } else if let Some(StopReason::Breakpoint(addr)) = self.exec.last_stop_reason {
+                } else if let Some(addr) = self.exec.last_stop_addr {
                     ui.colored_label(
                         egui::Color32::from_rgb(255, 180, 60),
                         format!("Stopped at breakpoint 0x{:04X}", addr),

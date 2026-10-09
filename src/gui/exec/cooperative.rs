@@ -1,11 +1,11 @@
-use super::{Command, Event, Machine, Runner, SLICE_TICKS, StopReason};
+use super::{Command, Event, Machine, Runner, SLICE_TICKS};
 use crate::traits::SynchronousComponent;
 use std::collections::{HashSet, VecDeque};
 
 pub struct Cooperative {
     machine: Option<Machine>,
     breakpoints: HashSet<u16>,
-    finished: Option<StopReason>,
+    finished: Option<u16>,
     pending: VecDeque<Command>,
 }
 
@@ -52,9 +52,9 @@ impl Runner for Cooperative {
         let mut cycles = 0u64;
         loop {
             if self.breakpoints.contains(&machine.cpu.get_pc()) {
-                let reason = StopReason::Breakpoint(machine.cpu.get_pc());
-                self.finished = Some(reason);
-                events.push(Event::Finished(reason));
+                let addr = machine.cpu.get_pc();
+                self.finished = Some(addr);
+                events.push(Event::Finished(addr));
                 events.push(Event::Snapshot(machine.snapshot()));
                 return events;
             }

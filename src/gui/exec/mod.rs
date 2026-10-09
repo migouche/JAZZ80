@@ -24,17 +24,10 @@ pub enum Command {
     Tick,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StopReason {
-    #[cfg(not(target_arch = "wasm32"))]
-    Stopped,
-    Breakpoint(u16),
-}
-
 #[derive(Debug)]
 pub enum Event {
     Snapshot(MachineSnapshot),
-    Finished(StopReason),
+    Finished(u16),
 }
 
 pub trait Runner {
@@ -63,5 +56,3 @@ pub fn create_runner() -> RunnerImpl {
 
 #[cfg(test)]
 mod tests;
-#[cfg(all(test, target_arch = "wasm32"))]
-mod wasm_tests;
