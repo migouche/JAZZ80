@@ -1,5 +1,3 @@
-#![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-
 use super::{Command, Event, Machine, Runner, SLICE_TICKS, SNAPSHOT_INTERVAL, StopReason};
 use crate::emulator::SliceResult;
 use crate::traits::SynchronousComponent;
@@ -110,15 +108,7 @@ fn worker_loop(
                 Command::SetBreakpoints(bp) => breakpoints = bp,
                 Command::Resume => machine.cpu.set_halted(false),
                 Command::Stop => stop = true,
-                Command::SetPC(v) => machine.cpu.set_pc(v),
-                Command::SetSP(v) => machine.cpu.set_sp(v),
-                Command::SetIX(v) => machine.cpu.set_ix(v),
-                Command::SetIY(v) => machine.cpu.set_iy(v),
-                Command::SetRegister(r, v) => machine.cpu.set_register(r, v),
-                Command::SetShadowRegister(r, v) => machine.cpu.set_shadow_register(r, v),
-                Command::SetFlag(f, v) => machine.cpu.set_flag(v, f),
                 Command::Tick => machine.cpu.tick(),
-                Command::SetHalted(v) => machine.cpu.set_halted(v),
             }
         }
         if stop {

@@ -1,8 +1,8 @@
-#![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
-
 use crate::components::memories::mem_64k::Mem64k;
 use crate::cpu::{Flag, GPR, Z80A};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::traits::SynchronousComponent;
+#[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashSet;
 
 pub struct Machine {
@@ -20,6 +20,7 @@ impl Machine {
         self.cpu.memory.as_mut()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn run_slice(&mut self, max_ticks: u64, breakpoints: &HashSet<u16>) -> SliceResult {
         let mut cycles = 0u64;
         loop {
@@ -163,6 +164,7 @@ impl Default for MachineSnapshot {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SliceResult {
     BudgetExhausted { cycles: u64 },

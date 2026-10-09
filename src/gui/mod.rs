@@ -166,7 +166,6 @@ const APP_ID: &str = "jazz80-simulator";
 const APP_NAME: &str = "JAZZ80 - Z80 Simulator";
 const STORAGE_KEY: &str = "z80_workspace";
 
-#[allow(dead_code)]
 impl ExecutionState {
     pub fn new() -> Self {
         Self {
@@ -176,28 +175,6 @@ impl ExecutionState {
             breakpoint_addrs: HashSet::new(),
             is_running: false,
             last_stop_reason: None,
-        }
-    }
-
-    pub fn edit_cpu<F, R>(&mut self, f: F) -> R
-    where
-        F: FnOnce(&mut Machine) -> R,
-    {
-        if let Some(machine) = self.machine.as_mut() {
-            let result = f(machine);
-            self.refresh_snapshot();
-            result
-        } else {
-            // Machine is running in the runner; we cannot edit it directly.
-            // The UI should send commands instead. This is a fallback that
-            // takes the machine back (stopping execution) and applies the edit.
-            let mut machine = self.runner.take_machine();
-            let result = f(&mut machine);
-            self.machine = Some(machine);
-            self.is_running = false;
-            self.last_stop_reason = None;
-            self.refresh_snapshot();
-            result
         }
     }
 
@@ -229,43 +206,11 @@ impl ExecutionState {
         }
     }
 
-    pub fn start_execution(&mut self) {
-        let machine = self.machine.take().unwrap_or_default();
-        self.is_running = true;
-        self.last_stop_reason = None;
-        self.runner.start(machine, self.breakpoint_addrs.clone());
-    }
-
-    pub fn stop_execution(&mut self) {
-        if self.machine.is_some() {
-            return;
-        }
-        self.machine = Some(self.runner.take_machine());
-        self.is_running = false;
-        self.refresh_snapshot();
-    }
-
     pub fn ensure_machine_reclaimed(&mut self) {
         if self.machine.is_none() && !self.runner.is_running() {
             self.machine = Some(self.runner.take_machine());
             self.refresh_snapshot();
         }
-    }
-
-    pub fn load_and_reset(&mut self, attached_devices: &[Arc<Mutex<dyn DeviceWithUi>>]) {
-        self.machine = if self.machine.is_some() {
-            self.machine.take()
-        } else {
-            Some(self.runner.take_machine())
-        };
-        let machine = self.machine.as_mut().unwrap();
-        for device in attached_devices {
-            device.lock().unwrap().reset();
-            machine.cpu.attach_device(device.clone());
-        }
-
-        self.is_running = false;
-        self.last_stop_reason = None;
     }
 }
 
