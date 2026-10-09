@@ -1,5 +1,5 @@
-use crate::gui::Machine;
 use crate::cpu::Z80A;
+use crate::gui::Machine;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native;

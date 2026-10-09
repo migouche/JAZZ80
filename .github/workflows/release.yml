@@ -9,7 +9,6 @@ on:
       - master
 
 env:
-  # TODO: Change this to your actual binary name from Cargo.toml
   BINARY_NAME: JAZZ80
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

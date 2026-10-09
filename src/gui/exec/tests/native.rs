@@ -1,11 +1,9 @@
+use super::machine_with;
 use crate::cpu::GPR;
 use crate::gui::exec::threaded::Threaded;
 use crate::gui::exec::{Command, Event, Runner};
 use std::collections::HashSet;
 use std::time::Duration;
-use super::machine_with;
-
-
 
 pub fn drain_until_finished<R: Runner>(runner: &mut R, max: Duration) -> Event {
     let deadline = std::time::Instant::now() + max;
@@ -15,11 +13,13 @@ pub fn drain_until_finished<R: Runner>(runner: &mut R, max: Duration) -> Event {
                 return event;
             }
         }
-        assert!(std::time::Instant::now() < deadline, "timed out waiting for finish");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for finish"
+        );
         std::thread::sleep(Duration::from_millis(1));
     }
 }
-
 
 pub fn hits_breakpoint_and_returns_machine<R: Runner>(mut runner: R) {
     let machine = machine_with(&[0x3E, 0x42]);
@@ -38,7 +38,6 @@ pub fn hits_breakpoint_and_returns_machine<R: Runner>(mut runner: R) {
     assert_eq!(machine.cpu.get_pc(), 0x0002);
     assert_eq!(machine.cpu.get_register(crate::cpu::GPR::A), 0x42);
 }
-
 
 pub fn delivers_snapshots_while_running<R: Runner>(mut runner: R) {
     let machine = machine_with(&[0x3E, 0x42]);
@@ -61,7 +60,6 @@ pub fn delivers_snapshots_while_running<R: Runner>(mut runner: R) {
     let _ = runner.take_machine();
 }
 
-
 pub fn nmi_command_wakes_halted_cpu<R: Runner>(mut runner: R) {
     let mut machine = machine_with(&[0x76, 0xC3, 0x01, 0x00]);
     machine.cpu.memory.write(0x0066, 0xC9);
@@ -74,7 +72,6 @@ pub fn nmi_command_wakes_halted_cpu<R: Runner>(mut runner: R) {
     let machine = runner.take_machine();
     assert!(!machine.cpu.is_halted(), "NMI did not wake the halted CPU");
 }
-
 
 #[test]
 fn threaded_hits_breakpoint_and_returns_machine() {
