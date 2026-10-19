@@ -43,7 +43,6 @@ JAZZ80 started life as a Bachelor's Thesis (*Trabajo de Fin de Grado*) at Univer
 - 🐞 **Step-by-step debugging** — run, pause, single-step, and set breakpoints anywhere in your code
 - 🔁 **Interrupts** — all three interrupt modes (IM 0/1/2) and NMIs, with dedicated buttons to trigger them on demand
 - 🧠 **Live CPU state** — inspect and hand-edit every register, including the shadow register set (`AF'`, `BC'`, `DE'`, `HL'`)
-- 🛡️ **OS-reserved shadow bank** — the bundled monitor design treats the alternate register bank as its own private state; user programs run in the main bank and should not rely on `AF'`, `BC'`, `DE'`, or `HL'`
 - 🗺️ **Memory view** — browse and edit simulator memory directly
 - 🎨 **Built-in editor** — syntax highlighting inspired by the One Dark theme
 - 💾 **Persistence** — save and reload programs, with session state preserved between runs
