@@ -44,14 +44,8 @@ pub type RunnerImpl = threaded::Threaded;
 #[cfg(target_arch = "wasm32")]
 pub type RunnerImpl = cooperative::Cooperative;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub fn create_runner() -> RunnerImpl {
-    threaded::Threaded::new()
-}
-
-#[cfg(target_arch = "wasm32")]
-pub fn create_runner() -> RunnerImpl {
-    cooperative::Cooperative::new()
+    RunnerImpl::new()
 }
 
 #[cfg(test)]
