@@ -4,6 +4,13 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   coverage:
     runs-on: ubuntu-latest
@@ -12,22 +19,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+      - name: Cache cargo registry & build
+        uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-llvm-cov
         run: |
@@ -55,11 +50,8 @@ jobs:
           COVERAGE=$(printf "%.2f" "$COVERAGE")
           echo "Coverage: $COVERAGE"
 
-          # Pick color based on coverage %
-          COLOR="red"
-          if (( $(echo "$COVERAGE > 80" | bc -l) )); then COLOR="green"
-          elif (( $(echo "$COVERAGE > 50" | bc -l) )); then COLOR="yellow"
-          fi
+          # Pick color based on coverage % (using awk instead of bc)
+          COLOR=$(awk -v cov="$COVERAGE" 'BEGIN { if (cov > 80) print "green"; else if (cov > 50) print "yellow"; else print "red" }')
 
           # Create JSON for badge
           cat <<EOJ > badge.json
