@@ -565,10 +565,11 @@ START:
 
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     fn open_file_dialog(&mut self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
+        // "Open" is for Z80 assembly source only. Use "Load Binary..." to import
+        // a raw binary image.
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Assembly", &["asm", "z80"])
-            .add_filter("Binary", &["bin", "rom", "com"])
             .add_filter("All files", &["*"])
             .pick_file()
         {
@@ -671,38 +672,19 @@ START:
         let current_is_disposable = current_tab.path.is_none()
             && (current_tab.code.trim().is_empty() || current_tab.code == default_code)
             && !current_tab.is_dirty;
-        let binary_kind = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "bin" | "rom" | "com"))
-            .unwrap_or(false);
+        let tab = EditorTab {
+            path: Some(path.clone()),
+            code: content,
+            kind: EditorTabKind::Source,
+            is_dirty: false,
+            breakpoints: HashSet::new(),
+            binary_bytes: None,
+        };
 
         if current_is_disposable {
-            self.tabs[self.active_tab] = EditorTab {
-                path: Some(path.clone()),
-                code: content,
-                kind: if binary_kind {
-                    EditorTabKind::Binary
-                } else {
-                    EditorTabKind::Source
-                },
-                is_dirty: false,
-                breakpoints: HashSet::new(),
-                binary_bytes: None,
-            };
+            self.tabs[self.active_tab] = tab;
         } else {
-            self.tabs.push(EditorTab {
-                path: Some(path.clone()),
-                code: content,
-                kind: if binary_kind {
-                    EditorTabKind::Binary
-                } else {
-                    EditorTabKind::Source
-                },
-                is_dirty: false,
-                breakpoints: HashSet::new(),
-                binary_bytes: None,
-            });
+            self.tabs.push(tab);
             self.active_tab = self.tabs.len() - 1;
         }
 
@@ -726,26 +708,10 @@ START:
             return;
         }
 
+        // Opening a file always loads Z80 assembly source. Use "Load Binary..."
+        // to import a raw binary image.
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let is_binary = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "bin" | "rom" | "com"))
-                .unwrap_or(false);
-
-            if is_binary {
-                match std::fs::read(&path) {
-                    Ok(bytes) => {
-                        self.open_binary_tab(path, bytes, storage);
-                    }
-                    Err(err) => {
-                        self.last_error = Some(format!("Failed to open binary file: {}", err));
-                    }
-                }
-                return;
-            }
-
             match std::fs::read_to_string(&path) {
                 Ok(content) => {
                     self.load_file_content(path, content, storage);
