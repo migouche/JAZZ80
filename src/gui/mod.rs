@@ -564,7 +564,11 @@ START:
     }
 
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
-    fn open_file_dialog(&mut self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
+    fn open_file_dialog(
+        &mut self,
+        ctx: &egui::Context,
+        storage: Option<&mut (dyn eframe::Storage + 'static)>,
+    ) {
         // "Open" is for Z80 assembly source only. Use "Load Binary..." to import
         // a raw binary image.
         #[cfg(not(target_arch = "wasm32"))]
@@ -573,7 +577,7 @@ START:
             .add_filter("All files", &["*"])
             .pick_file()
         {
-            self.open_file(path, storage);
+            self.open_file(path, ctx, storage);
         }
 
         #[cfg(target_arch = "wasm32")]
@@ -693,7 +697,13 @@ START:
         self.save_to_storage(storage);
     }
 
-    fn open_file(&mut self, path: PathBuf, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
+    fn open_file(
+        &mut self,
+        path: PathBuf,
+        ctx: &egui::Context,
+        storage: Option<&mut (dyn eframe::Storage + 'static)>,
+    ) {
         // Check if already open
         if let Some(idx) = self
             .tabs
@@ -722,9 +732,11 @@ START:
             }
         }
 
+        // On the web there is no filesystem path to re-open, so a "recent file"
+        // is an example that can be fetched from the server by name.
         #[cfg(target_arch = "wasm32")]
         {
-            self.last_error = Some("Opening local files by path not supported on web".to_string());
+            self.load_example(path.to_string_lossy().into_owned(), ctx.clone());
         }
     }
 
@@ -942,8 +954,8 @@ START:
     ) {
         match action {
             HeaderAction::NewFile => self.new_file(frame.storage_mut()),
-            HeaderAction::OpenFileDialog => self.open_file_dialog(frame.storage_mut()),
-            HeaderAction::OpenFile(path) => self.open_file(path, frame.storage_mut()),
+            HeaderAction::OpenFileDialog => self.open_file_dialog(ctx, frame.storage_mut()),
+            HeaderAction::OpenFile(path) => self.open_file(path, ctx, frame.storage_mut()),
             HeaderAction::SaveFile => self.save_file(self.active_tab, frame.storage_mut()),
             HeaderAction::SaveFileAs => self.save_file_as(frame.storage_mut()),
             HeaderAction::AssembleBinary => self.assemble_binary_to_file(frame.storage_mut()),
