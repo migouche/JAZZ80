@@ -1,6 +1,4 @@
-#![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-
-use super::{Command, Event, Machine, Runner, SLICE_TICKS, SNAPSHOT_INTERVAL, StopReason};
+use super::{Command, Event, Machine, Runner, SLICE_TICKS, SNAPSHOT_INTERVAL};
 use crate::emulator::SliceResult;
 use crate::traits::SynchronousComponent;
 use std::collections::HashSet;
@@ -101,7 +99,7 @@ fn worker_loop(
     machine_tx: Sender<Machine>,
 ) {
     let mut last_snap = Instant::now();
-    let stop_reason: StopReason = 'outer: loop {
+    let stop_addr: Option<u16> = 'outer: loop {
         let mut stop = false;
         for command in cmd_rx.try_iter() {
             match command {
@@ -110,19 +108,11 @@ fn worker_loop(
                 Command::SetBreakpoints(bp) => breakpoints = bp,
                 Command::Resume => machine.cpu.set_halted(false),
                 Command::Stop => stop = true,
-                Command::SetPC(v) => machine.cpu.set_pc(v),
-                Command::SetSP(v) => machine.cpu.set_sp(v),
-                Command::SetIX(v) => machine.cpu.set_ix(v),
-                Command::SetIY(v) => machine.cpu.set_iy(v),
-                Command::SetRegister(r, v) => machine.cpu.set_register(r, v),
-                Command::SetShadowRegister(r, v) => machine.cpu.set_shadow_register(r, v),
-                Command::SetFlag(f, v) => machine.cpu.set_flag(v, f),
                 Command::Tick => machine.cpu.tick(),
-                Command::SetHalted(v) => machine.cpu.set_halted(v),
             }
         }
         if stop {
-            break 'outer StopReason::Stopped;
+            break 'outer None;
         }
         match machine.run_slice(SLICE_TICKS, &breakpoints) {
             SliceResult::BudgetExhausted { .. } => {
@@ -138,13 +128,15 @@ fn worker_loop(
                 std::thread::sleep(SNAPSHOT_INTERVAL);
             }
             SliceResult::HitBreakpoint { .. } => {
-                let reason = StopReason::Breakpoint(machine.cpu.get_pc());
+                let addr = machine.cpu.get_pc();
                 let _ = event_tx.try_send(Event::Snapshot(machine.snapshot()));
-                break 'outer reason;
+                break 'outer Some(addr);
             }
         }
     };
-    let _ = event_tx.try_send(Event::Finished(stop_reason));
+    if let Some(addr) = stop_addr {
+        let _ = event_tx.try_send(Event::Finished(addr));
+    }
     let _ = event_tx.try_send(Event::Snapshot(machine.snapshot()));
     let _ = machine_tx.send(machine);
 }

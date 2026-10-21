@@ -1,5 +1,8 @@
 use super::*;
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashSet;
 
+#[cfg(not(target_arch = "wasm32"))]
 fn program(mut cpu: Z80A, bytes: &[u8]) -> Z80A {
     for (i, b) in bytes.iter().enumerate() {
         cpu.memory.write(i as u16, *b);
@@ -27,6 +30,7 @@ fn snapshot_matches_cpu_state() {
     assert_eq!(snap.memory.len(), 0x10000);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn run_slice_zero_budget_executes_nothing() {
     let mut machine = Machine::new();
@@ -36,6 +40,7 @@ fn run_slice_zero_budget_executes_nothing() {
     assert_eq!(machine.cpu.get_pc(), 0);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn run_slice_executes_up_to_max_ticks() {
     let mut machine = Machine::new();
@@ -53,6 +58,7 @@ fn run_slice_executes_up_to_max_ticks() {
     assert_eq!(machine.cpu.get_pc(), 17);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn run_slice_reports_cycles_across_repeated_slices() {
     let mut machine = Machine::new();
@@ -69,6 +75,7 @@ fn run_slice_reports_cycles_across_repeated_slices() {
     assert_eq!(machine.cpu.get_pc(), 6);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn run_slice_stops_at_breakpoint_before_execution() {
     let mut machine = Machine::new();
@@ -88,6 +95,7 @@ fn run_slice_stops_at_breakpoint_before_execution() {
     assert_eq!(machine.cpu.get_register(GPR::A), 0x42);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn run_slice_returns_halted_while_cpu_is_halted() {
     let mut machine = Machine::new();
@@ -99,6 +107,7 @@ fn run_slice_returns_halted_while_cpu_is_halted() {
     assert!(machine.cpu.is_halted());
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn run_slice_wakes_halted_cpu_on_nmi() {
     let mut machine = Machine::new();
@@ -117,6 +126,7 @@ fn run_slice_wakes_halted_cpu_on_nmi() {
     assert!(!machine.cpu.is_halted());
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn run_slice_wakes_halted_cpu_on_maskable_interrupt() {
     let mut machine = Machine::new();

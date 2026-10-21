@@ -39,5 +39,23 @@ fn main() {
             )
             .await
             .expect("failed to start eframe");
+
+        // Remove loading screen
+        if let Some(loading) = document.get_element_by_id("loading") {
+            use wasm_bindgen::closure::Closure;
+            loading.set_attribute("class", "hidden").ok();
+            let window = web_sys::window().expect("No window");
+            let loading = loading.clone();
+            let callback = Closure::once_into_js(move || {
+                loading.remove();
+            });
+            window
+                .set_timeout_with_callback_and_timeout_and_arguments(
+                    callback.as_ref().unchecked_ref(),
+                    500,
+                    &js_sys::Array::new(),
+                )
+                .ok();
+        }
     });
 }

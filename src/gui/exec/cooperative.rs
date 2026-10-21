@@ -1,16 +1,14 @@
-use super::{Command, Event, Machine, Runner, SLICE_TICKS, StopReason};
+use super::{Command, Event, Machine, Runner, SLICE_TICKS};
 use crate::traits::SynchronousComponent;
 use std::collections::{HashSet, VecDeque};
 
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub struct Cooperative {
     machine: Option<Machine>,
     breakpoints: HashSet<u16>,
-    finished: Option<StopReason>,
+    finished: Option<u16>,
     pending: VecDeque<Command>,
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 impl Cooperative {
     pub fn new() -> Self {
         Self {
@@ -22,7 +20,6 @@ impl Cooperative {
     }
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 impl Runner for Cooperative {
     fn start(&mut self, machine: Machine, breakpoints: HashSet<u16>) {
         assert!(self.machine.is_none(), "runner already running");
@@ -42,43 +39,22 @@ impl Runner for Cooperative {
             return events;
         }
 
-        let mut stop = false;
         while let Some(command) = self.pending.pop_front() {
-            if stop {
-                self.pending.clear();
-                break;
-            }
             match command {
                 Command::Nmi => machine.cpu.nmi(),
                 Command::SetInterrupt(v) => machine.cpu.set_interrupt(v),
                 Command::SetBreakpoints(bp) => self.breakpoints = bp,
                 Command::Resume => machine.cpu.set_halted(false),
-                Command::Stop => stop = true,
-                Command::SetPC(v) => machine.cpu.set_pc(v),
-                Command::SetSP(v) => machine.cpu.set_sp(v),
-                Command::SetIX(v) => machine.cpu.set_ix(v),
-                Command::SetIY(v) => machine.cpu.set_iy(v),
-                Command::SetRegister(r, v) => machine.cpu.set_register(r, v),
-                Command::SetShadowRegister(r, v) => machine.cpu.set_shadow_register(r, v),
-                Command::SetFlag(f, v) => machine.cpu.set_flag(v, f),
                 Command::Tick => machine.cpu.tick(),
-                Command::SetHalted(v) => machine.cpu.set_halted(v),
             }
-        }
-        if stop {
-            let reason = StopReason::Stopped;
-            self.finished = Some(reason);
-            events.push(Event::Finished(reason));
-            events.push(Event::Snapshot(machine.snapshot()));
-            return events;
         }
 
         let mut cycles = 0u64;
         loop {
             if self.breakpoints.contains(&machine.cpu.get_pc()) {
-                let reason = StopReason::Breakpoint(machine.cpu.get_pc());
-                self.finished = Some(reason);
-                events.push(Event::Finished(reason));
+                let addr = machine.cpu.get_pc();
+                self.finished = Some(addr);
+                events.push(Event::Finished(addr));
                 events.push(Event::Snapshot(machine.snapshot()));
                 return events;
             }

@@ -1,7 +1,7 @@
 use crate::assembler::{AssemblyLine, Symbol, SymbolType, assemble_binary, assemble_with_metadata};
 use crate::cpu::{Flag, GPR};
 use crate::emulator::{Machine, MachineSnapshot};
-use crate::gui::exec::{Command, Event, Runner, RunnerImpl, StopReason};
+use crate::gui::exec::{Command, Event, Runner, RunnerImpl};
 use crate::traits::SynchronousComponent;
 use eframe::egui::{self, TextBuffer};
 use std::collections::{HashMap, HashSet};
@@ -157,7 +157,7 @@ pub struct ExecutionState {
     #[serde(skip)]
     is_running: bool,
     #[serde(skip)]
-    last_stop_reason: Option<StopReason>,
+    last_stop_addr: Option<u16>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -166,7 +166,6 @@ const APP_ID: &str = "jazz80-simulator";
 const APP_NAME: &str = "JAZZ80 - Z80 Simulator";
 const STORAGE_KEY: &str = "z80_workspace";
 
-#[allow(dead_code)]
 impl ExecutionState {
     pub fn new() -> Self {
         Self {
@@ -175,29 +174,7 @@ impl ExecutionState {
             runner: crate::gui::exec::create_runner(),
             breakpoint_addrs: HashSet::new(),
             is_running: false,
-            last_stop_reason: None,
-        }
-    }
-
-    pub fn edit_cpu<F, R>(&mut self, f: F) -> R
-    where
-        F: FnOnce(&mut Machine) -> R,
-    {
-        if let Some(machine) = self.machine.as_mut() {
-            let result = f(machine);
-            self.refresh_snapshot();
-            result
-        } else {
-            // Machine is running in the runner; we cannot edit it directly.
-            // The UI should send commands instead. This is a fallback that
-            // takes the machine back (stopping execution) and applies the edit.
-            let mut machine = self.runner.take_machine();
-            let result = f(&mut machine);
-            self.machine = Some(machine);
-            self.is_running = false;
-            self.last_stop_reason = None;
-            self.refresh_snapshot();
-            result
+            last_stop_addr: None,
         }
     }
 
@@ -229,43 +206,11 @@ impl ExecutionState {
         }
     }
 
-    pub fn start_execution(&mut self) {
-        let machine = self.machine.take().unwrap_or_default();
-        self.is_running = true;
-        self.last_stop_reason = None;
-        self.runner.start(machine, self.breakpoint_addrs.clone());
-    }
-
-    pub fn stop_execution(&mut self) {
-        if self.machine.is_some() {
-            return;
-        }
-        self.machine = Some(self.runner.take_machine());
-        self.is_running = false;
-        self.refresh_snapshot();
-    }
-
     pub fn ensure_machine_reclaimed(&mut self) {
         if self.machine.is_none() && !self.runner.is_running() {
             self.machine = Some(self.runner.take_machine());
             self.refresh_snapshot();
         }
-    }
-
-    pub fn load_and_reset(&mut self, attached_devices: &[Arc<Mutex<dyn DeviceWithUi>>]) {
-        self.machine = if self.machine.is_some() {
-            self.machine.take()
-        } else {
-            Some(self.runner.take_machine())
-        };
-        let machine = self.machine.as_mut().unwrap();
-        for device in attached_devices {
-            device.lock().unwrap().reset();
-            machine.cpu.attach_device(device.clone());
-        }
-
-        self.is_running = false;
-        self.last_stop_reason = None;
     }
 }
 
@@ -435,7 +380,7 @@ START:
         }
 
         self.exec.is_running = false;
-        self.exec.last_stop_reason = None;
+        self.exec.last_stop_addr = None;
 
         if self.tabs.is_empty() {
             self.refresh_snapshot();
@@ -537,7 +482,7 @@ START:
             let result = f(&mut machine);
             self.exec.machine = Some(machine);
             self.exec.is_running = false;
-            self.exec.last_stop_reason = None;
+            self.exec.last_stop_addr = None;
             self.refresh_snapshot();
             result
         }
@@ -570,7 +515,7 @@ START:
     fn start_execution(&mut self) {
         let machine = self.exec.machine.take().unwrap_or_default();
         self.exec.is_running = true;
-        self.exec.last_stop_reason = None;
+        self.exec.last_stop_addr = None;
         self.exec
             .runner
             .start(machine, self.exec.breakpoint_addrs.clone());
@@ -619,15 +564,20 @@ START:
     }
 
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
-    fn open_file_dialog(&mut self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
+    fn open_file_dialog(
+        &mut self,
+        ctx: &egui::Context,
+        storage: Option<&mut (dyn eframe::Storage + 'static)>,
+    ) {
+        // "Open" is for Z80 assembly source only. Use "Load Binary..." to import
+        // a raw binary image.
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Assembly", &["asm", "z80"])
-            .add_filter("Binary", &["bin", "rom", "com"])
             .add_filter("All files", &["*"])
             .pick_file()
         {
-            self.open_file(path, storage);
+            self.open_file(path, ctx, storage);
         }
 
         #[cfg(target_arch = "wasm32")]
@@ -726,38 +676,19 @@ START:
         let current_is_disposable = current_tab.path.is_none()
             && (current_tab.code.trim().is_empty() || current_tab.code == default_code)
             && !current_tab.is_dirty;
-        let binary_kind = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "bin" | "rom" | "com"))
-            .unwrap_or(false);
+        let tab = EditorTab {
+            path: Some(path.clone()),
+            code: content,
+            kind: EditorTabKind::Source,
+            is_dirty: false,
+            breakpoints: HashSet::new(),
+            binary_bytes: None,
+        };
 
         if current_is_disposable {
-            self.tabs[self.active_tab] = EditorTab {
-                path: Some(path.clone()),
-                code: content,
-                kind: if binary_kind {
-                    EditorTabKind::Binary
-                } else {
-                    EditorTabKind::Source
-                },
-                is_dirty: false,
-                breakpoints: HashSet::new(),
-                binary_bytes: None,
-            };
+            self.tabs[self.active_tab] = tab;
         } else {
-            self.tabs.push(EditorTab {
-                path: Some(path.clone()),
-                code: content,
-                kind: if binary_kind {
-                    EditorTabKind::Binary
-                } else {
-                    EditorTabKind::Source
-                },
-                is_dirty: false,
-                breakpoints: HashSet::new(),
-                binary_bytes: None,
-            });
+            self.tabs.push(tab);
             self.active_tab = self.tabs.len() - 1;
         }
 
@@ -766,7 +697,13 @@ START:
         self.save_to_storage(storage);
     }
 
-    fn open_file(&mut self, path: PathBuf, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
+    fn open_file(
+        &mut self,
+        path: PathBuf,
+        ctx: &egui::Context,
+        storage: Option<&mut (dyn eframe::Storage + 'static)>,
+    ) {
         // Check if already open
         if let Some(idx) = self
             .tabs
@@ -781,26 +718,10 @@ START:
             return;
         }
 
+        // Opening a file always loads Z80 assembly source. Use "Load Binary..."
+        // to import a raw binary image.
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let is_binary = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "bin" | "rom" | "com"))
-                .unwrap_or(false);
-
-            if is_binary {
-                match std::fs::read(&path) {
-                    Ok(bytes) => {
-                        self.open_binary_tab(path, bytes, storage);
-                    }
-                    Err(err) => {
-                        self.last_error = Some(format!("Failed to open binary file: {}", err));
-                    }
-                }
-                return;
-            }
-
             match std::fs::read_to_string(&path) {
                 Ok(content) => {
                     self.load_file_content(path, content, storage);
@@ -811,9 +732,11 @@ START:
             }
         }
 
+        // On the web there is no filesystem path to re-open, so a "recent file"
+        // is an example that can be fetched from the server by name.
         #[cfg(target_arch = "wasm32")]
         {
-            self.last_error = Some("Opening local files by path not supported on web".to_string());
+            self.load_example(path.to_string_lossy().into_owned(), ctx.clone());
         }
     }
 
@@ -1031,8 +954,8 @@ START:
     ) {
         match action {
             HeaderAction::NewFile => self.new_file(frame.storage_mut()),
-            HeaderAction::OpenFileDialog => self.open_file_dialog(frame.storage_mut()),
-            HeaderAction::OpenFile(path) => self.open_file(path, frame.storage_mut()),
+            HeaderAction::OpenFileDialog => self.open_file_dialog(ctx, frame.storage_mut()),
+            HeaderAction::OpenFile(path) => self.open_file(path, ctx, frame.storage_mut()),
             HeaderAction::SaveFile => self.save_file(self.active_tab, frame.storage_mut()),
             HeaderAction::SaveFileAs => self.save_file_as(frame.storage_mut()),
             HeaderAction::AssembleBinary => self.assemble_binary_to_file(frame.storage_mut()),
@@ -1058,9 +981,9 @@ START:
                     Event::Snapshot(snapshot) => {
                         self.exec.snapshot = snapshot;
                     }
-                    Event::Finished(reason) => {
+                    Event::Finished(addr) => {
                         self.exec.is_running = false;
-                        self.exec.last_stop_reason = Some(reason);
+                        self.exec.last_stop_addr = Some(addr);
                     }
                 }
             }
@@ -1728,7 +1651,7 @@ impl eframe::App for Z80App {
                     }
                 } else if self.exec.is_running {
                     ui.label(egui::RichText::new("Running").color(egui::Color32::GREEN));
-                } else if let Some(StopReason::Breakpoint(addr)) = self.exec.last_stop_reason {
+                } else if let Some(addr) = self.exec.last_stop_addr {
                     ui.colored_label(
                         egui::Color32::from_rgb(255, 180, 60),
                         format!("Stopped at breakpoint 0x{:04X}", addr),

@@ -1,17 +1,20 @@
 name: Auto Release on Push
 
 permissions:
-  contents: write # Required to create releases
+  contents: write
 
 on:
   push:
     branches:
       - master
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
-  # TODO: Change this to your actual binary name from Cargo.toml
   BINARY_NAME: JAZZ80
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  CARGO_TERM_COLOR: always
 
 jobs:
   # JOB 1: Build the Rust binaries on 3 different OSs
@@ -37,6 +40,9 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & build
+        uses: Swatinem/rust-cache@v2
 
       - name: Build project
         run: cargo build --release --verbose
@@ -79,12 +85,11 @@ jobs:
           # 1. Create a tag
           TAG_NAME="release-$(git rev-parse --short HEAD)"
           echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
-          
+
           # 2. Get the subject (Title)
-          # We use env vars to prevent shell injection/delimiter issues
           SUBJECT=$(git log -1 --pretty=format:"%s")
           echo "subject=$SUBJECT" >> $GITHUB_OUTPUT
-          
+
           # 3. Get the body (Description) and handle multi-line safely
           {
             echo "body<<EOF"
@@ -93,24 +98,18 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
-          # 4. Prerelease detection (starts with v0. or 0.)
-          if [[ "$SUBJECT" =~ ^v?0\. ]]; then
-            echo "is_prerelease=true" >> $GITHUB_OUTPUT
-          else
-            echo "is_prerelease=false" >> $GITHUB_OUTPUT
-          fi
-
       - name: Display Downloaded Files (Debug)
         run: ls -R artifacts/
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.vars.outputs.tag }}
           name: ${{ steps.vars.outputs.subject }}
           body: ${{ steps.vars.outputs.body }}
           draft: false
-          prerelease: ${{ steps.vars.outputs.is_prerelease == 'true' }}
+          prerelease: false
+          make_latest: true
           files: |
             artifacts/**/*.exe
             artifacts/**/JAZZ80-linux-amd64

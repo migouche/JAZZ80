@@ -14,6 +14,9 @@ concurrency:
   group: "pages"
   cancel-in-progress: false
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,6 +25,9 @@ jobs:
 
       - name: Install Rust
         run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache cargo registry & build
+        uses: Swatinem/rust-cache@v2
 
       - name: Download Trunk
         uses: jetli/trunk-action@v0.5.0
