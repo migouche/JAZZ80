@@ -160,8 +160,18 @@ pub struct Z80App {
     #[serde(skip)]
     binary_file_receiver: Option<Receiver<(String, Vec<u8>)>>,
 
+    /// Example names advertised by the bundled `examples.json` (web only).
+    #[cfg(target_arch = "wasm32")]
     #[serde(skip)]
     examples_list: Vec<String>,
+
+    #[cfg(target_arch = "wasm32")]
+    #[serde(skip)]
+    examples_receiver: Option<Receiver<Vec<String>>>,
+
+    #[cfg(target_arch = "wasm32")]
+    #[serde(skip)]
+    example_file_receiver: Option<Receiver<Result<(String, Vec<u8>), String>>>,
 
     recent_files: Vec<PathBuf>,
 
@@ -317,6 +327,26 @@ fn snapshot_flag(snapshot: &MachineSnapshot, flag: Flag) -> bool {
         Flag::N => snapshot.flags.n,
         Flag::C => snapshot.flags.c,
     }
+}
+
+/// Build a URL for a file inside the bundled `z80 files` directory on the web.
+/// Resolves relative to the deployed page so sub-path deployments keep working.
+#[cfg(target_arch = "wasm32")]
+fn z80_files_url(file: &str) -> Option<String> {
+    let window = web_sys::window()?;
+    let location = window.location();
+    let origin = location.origin().ok()?;
+    let pathname = location.pathname().ok()?;
+
+    let base = if pathname.ends_with('/') {
+        pathname
+    } else if let Some(slash) = pathname.rfind('/') {
+        pathname[..=slash].to_string()
+    } else {
+        "/".to_string()
+    };
+
+    Some(format!("{origin}{base}z80%20files/{file}"))
 }
 
 fn flag_description(flag: Flag) -> &'static str {
@@ -779,6 +809,9 @@ START:
             }
         }
 
+        #[cfg(target_arch = "wasm32")]
+        app.start_examples_fetch(&cc.egui_ctx);
+
         app.load_and_reset();
         app
     }
@@ -964,33 +997,85 @@ START:
         // is an example that can be fetched from the server by name.
         #[cfg(target_arch = "wasm32")]
         {
-            self.load_example(path.to_string_lossy().into_owned(), storage);
+            self.load_example(path.to_string_lossy().into_owned(), _ctx, storage);
         }
     }
 
-    /// Load an embedded example. Works identically on native and web: the bytes
-    /// are compiled into the binary, so there is no fetch to fail.
-    fn load_example(
-        &mut self,
-        filename: String,
-        storage: Option<&mut (dyn eframe::Storage + 'static)>,
-    ) {
-        let Some((name, contents)) = crate::examples::get_example_files()
-            .into_iter()
-            .find(|(name, _)| *name == filename)
-        else {
-            self.last_error = Some(format!("Example '{filename}' is not available"));
+    /// Fetch the list of example names from the bundled `examples.json`.
+    /// Examples are a web-only feature: the browser build cannot browse a
+    /// filesystem, so Trunk copies the `z80 files` folder next to the app.
+    #[cfg(target_arch = "wasm32")]
+    fn start_examples_fetch(&mut self, ctx: &egui::Context) {
+        let Some(url) = z80_files_url("examples.json") else {
             return;
         };
 
-        if name.ends_with(".bin") {
-            self.open_binary_tab(PathBuf::from(&name), contents, storage);
-        } else {
-            let text = String::from_utf8_lossy(&contents).into_owned();
-            self.load_file_content(PathBuf::from(&name), text, storage);
-        }
-        self.last_error = None;
-        self.status_message = Some(format!("Loaded example {name}"));
+        let (sender, receiver) = channel();
+        self.examples_receiver = Some(receiver);
+
+        let ctx = ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match reqwest::get(&url).await {
+                Ok(response) if response.status().is_success() => {
+                    match response.json::<Vec<String>>().await {
+                        Ok(examples) => {
+                            sender.send(examples).ok();
+                        }
+                        Err(err) => {
+                            web_sys::console::error_1(
+                                &format!("Failed to parse examples.json: {err}").into(),
+                            );
+                        }
+                    }
+                }
+                Ok(response) => {
+                    web_sys::console::error_1(
+                        &format!("examples.json returned {}", response.status()).into(),
+                    );
+                }
+                Err(err) => {
+                    web_sys::console::error_1(
+                        &format!("Failed to fetch examples.json: {err}").into(),
+                    );
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Fetch one bundled example by name and hand it to the editor. Text files
+    /// are opened as source; `.bin` files open in the read-only binary tab.
+    #[cfg(target_arch = "wasm32")]
+    fn load_example(
+        &mut self,
+        filename: String,
+        ctx: &egui::Context,
+        _storage: Option<&mut (dyn eframe::Storage + 'static)>,
+    ) {
+        let Some(url) = z80_files_url(&filename) else {
+            self.last_error = Some("Could not determine the examples URL".into());
+            return;
+        };
+
+        let (sender, receiver) = channel();
+        self.example_file_receiver = Some(receiver);
+
+        let ctx = ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = match reqwest::get(&url).await {
+                Ok(response) if response.status().is_success() => match response.bytes().await {
+                    Ok(bytes) => Ok((filename.clone(), bytes.to_vec())),
+                    Err(err) => Err(format!("Failed to read example '{filename}': {err}")),
+                },
+                Ok(response) => Err(format!(
+                    "Failed to load example '{filename}': HTTP {}",
+                    response.status()
+                )),
+                Err(err) => Err(format!("Failed to load example '{filename}': {err}")),
+            };
+            sender.send(result).ok();
+            ctx.request_repaint();
+        });
     }
 
     /// Save every dirty tab. Returns true when nothing is dirty afterwards
@@ -1707,7 +1792,12 @@ impl Default for Z80App {
             file_receiver: None,
             #[cfg(target_arch = "wasm32")]
             binary_file_receiver: None,
-            examples_list: crate::examples::example_names(),
+            #[cfg(target_arch = "wasm32")]
+            examples_list: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            examples_receiver: None,
+            #[cfg(target_arch = "wasm32")]
+            example_file_receiver: None,
             show_memory_viewer: false,
             show_shortcuts: false,
             memory_viewer_start: "0000".to_string(),
@@ -1741,6 +1831,50 @@ impl eframe::App for Z80App {
                     self.last_error = None;
                 }
                 self.binary_file_receiver = Some(receiver);
+            }
+            if let Some(receiver) = self.example_file_receiver.take() {
+                while let Ok(result) = receiver.try_recv() {
+                    match result {
+                        Ok((name, bytes)) => {
+                            if name.ends_with(".bin") {
+                                self.open_binary_tab(
+                                    PathBuf::from(&name),
+                                    bytes,
+                                    frame.storage_mut(),
+                                );
+                            } else {
+                                match String::from_utf8(bytes) {
+                                    Ok(text) => {
+                                        self.load_file_content(
+                                            PathBuf::from(&name),
+                                            text,
+                                            frame.storage_mut(),
+                                        );
+                                        self.status_message =
+                                            Some(format!("Loaded example {name}"));
+                                    }
+                                    Err(_) => {
+                                        self.last_error =
+                                            Some(format!("Example '{name}' is not valid UTF-8"));
+                                    }
+                                }
+                            }
+                        }
+                        Err(err) => self.last_error = Some(err),
+                    }
+                }
+                self.example_file_receiver = Some(receiver);
+            }
+            if let Some(receiver) = self.examples_receiver.take() {
+                match receiver.try_recv() {
+                    Ok(examples) => self.examples_list = examples,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        self.examples_receiver = Some(receiver);
+                    }
+                    // The fetch failed (the worker logs the reason). Leave the
+                    // list empty so the menu shows "No examples found".
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+                }
             }
         }
 
@@ -1927,28 +2061,36 @@ impl eframe::App for Z80App {
                 .response
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
 
-                ui.menu_button("Examples", |ui| {
-                    if self.examples_list.is_empty() {
-                        ui.label("No examples found");
-                    } else {
-                        let mut to_load = None;
-                        for ex in &self.examples_list {
-                            if ui
-                                .button(ex)
-                                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .clicked()
-                            {
-                                to_load = Some(ex.clone());
+                #[cfg(target_arch = "wasm32")]
+                {
+                    ui.menu_button("Examples", |ui| {
+                        if self.examples_list.is_empty() {
+                            let message = if self.examples_receiver.is_some() {
+                                "Loading examples…"
+                            } else {
+                                "No examples found"
+                            };
+                            ui.label(message);
+                        } else {
+                            let mut to_load = None;
+                            for ex in &self.examples_list {
+                                if ui
+                                    .button(ex)
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                    .clicked()
+                                {
+                                    to_load = Some(ex.clone());
+                                }
+                            }
+                            if let Some(ex) = to_load {
+                                self.load_example(ex, ui.ctx(), frame.storage_mut());
+                                ui.close();
                             }
                         }
-                        if let Some(ex) = to_load {
-                            self.load_example(ex, frame.storage_mut());
-                            ui.close();
-                        }
-                    }
-                })
-                .response
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    })
+                    .response
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                }
 
                 ui.menu_button("Help", |ui| {
                     if ui.button("Keyboard Shortcuts…").clicked() {
@@ -2897,8 +3039,6 @@ impl eframe::App for Z80App {
                             // Add a matching header so the text edit component starts exactly on the same row!
                             ui.label(egui::RichText::new("Code").font(font_id.clone()).strong().color(self.theme.muted));
 
-                            let highlight_line = highlight_line;
-
                             let theme = &self.code_theme;
                             let mut layouter =
                                 |ui: &egui::Ui, string: &dyn TextBuffer, _wrap_width: f32| {
@@ -3014,14 +3154,14 @@ impl eframe::App for Z80App {
                                     .color(self.theme.muted),
                             );
                         }
-                        if let Some(port) = parsed {
-                            if port > 0xFF {
-                                ui.label(
-                                    egui::RichText::new("Port must be 0–255")
-                                        .small()
-                                        .color(self.theme.danger),
-                                );
-                            }
+                        if let Some(port) = parsed
+                            && port > 0xFF
+                        {
+                            ui.label(
+                                egui::RichText::new("Port must be 0–255")
+                                    .small()
+                                    .color(self.theme.danger),
+                            );
                         }
 
                         ui.add_space(6.0);
@@ -3095,11 +3235,10 @@ impl eframe::App for Z80App {
 
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
-                            if ui.button("Save All").clicked() {
-                                if self.save_all(frame.storage_mut()) {
-                                    should_close_modal = true;
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                                }
+                            if ui.button("Save All").clicked() && self.save_all(frame.storage_mut())
+                            {
+                                should_close_modal = true;
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             }
                             if ui.button("Quit Without Saving").clicked() {
                                 for tab in &mut self.tabs {

@@ -1,8 +1,8 @@
-/// Bundled example programs, embedded in the binary for both native and web.
+/// Bundled example programs for the web build.
 ///
-/// Keeping this available on every target means the Examples menu is not a
-/// web-only feature: a fresh native install has something to run without
-/// hunting for a folder first.
+/// Examples are web-only: the native build opens real files from disk instead.
+/// These embedded copies back the virtual DOS "upload example" picker; the
+/// Examples menu itself is driven by `z80 files/examples.json` at runtime.
 pub fn get_example_files() -> Vec<(String, Vec<u8>)> {
     let asm_files: &[(&str, &[u8])] = &[
         ("fib.asm", include_bytes!("../z80 files/fib.asm")),
@@ -25,13 +25,5 @@ pub fn get_example_files() -> Vec<(String, Vec<u8>)> {
         .iter()
         .chain(bin_files.iter())
         .map(|(name, contents)| (name.to_string(), contents.to_vec()))
-        .collect()
-}
-
-/// The bundled examples offered in the Examples menu.
-pub fn example_names() -> Vec<String> {
-    get_example_files()
-        .into_iter()
-        .map(|(name, _)| name)
         .collect()
 }
