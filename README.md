@@ -43,11 +43,11 @@ JAZZ80 started life as a Bachelor's Thesis (*Trabajo de Fin de Grado*) at Univer
 - 🐞 **Step-by-step debugging** — run, pause, single-step, and set breakpoints anywhere in your code
 - 🔁 **Interrupts** — all three interrupt modes (IM 0/1/2) and NMIs, with dedicated buttons to trigger them on demand
 - 🧠 **Live CPU state** — inspect and hand-edit every register, including the shadow register set (`AF'`, `BC'`, `DE'`, `HL'`)
-- 🗺️ **Memory view** — browse and edit simulator memory directly
+- 🗺️ **Memory view** — read-only hex/ASCII browser that follows the program counter
 - 🎨 **Built-in editor** — syntax highlighting inspired by the One Dark theme
 - 💾 **Persistence** — save and reload programs, with session state preserved between runs
 - 🌐 **Runs anywhere** — a native desktop app on Windows/macOS/Linux, or a self-contained WebAssembly build that runs in any modern browser
-- 🧪 **Tested** — covered by an automated test suite (`rstest` + `egui_kittest`) with coverage tracked in CI
+- 🧪 **Tested** — automated CPU/assembler test suite (`rstest`) with coverage tracked in CI
 
 ## Getting Started
 
@@ -90,7 +90,7 @@ trunk build --release
 2. Set breakpoints on the lines you care about.
 3. Run or single-step through execution while registers, flags and memory update live. No need to save to run!
 4. Trigger an interrupt (IM 0/1/2) or an NMI at any point using the toolbar controls.
-5. Inspect or manually edit any register, shadow register, or memory cell mid-run.
+5. Inspect or manually edit any register, shadow register or flag mid-run; inspect memory in the read-only Memory Viewer.
 6. The bundled monitor reserves the alternate register bank for itself; when a program is launched, the OS swaps to the main bank and user code should treat `AF'`, `BC'`, `DE'`, and `HL'` as off-limits unless you are intentionally using them as the simulator's private OS state.
 7. Save your program and pick up where you left off later — the app persists session state between runs.
 
@@ -102,7 +102,7 @@ The bundled assembly examples are documented in the [Z80 Example Programs manual
 cargo test
 ```
 
-The test suite combines [`rstest`](https://github.com/la10736/rstest) for parameterized CPU/instruction tests with [`egui_kittest`](https://github.com/emilk/egui) for exercising the UI itself. Coverage is measured in CI and published as the badge at the top of this file.
+The test suite uses [`rstest`](https://github.com/la10736/rstest) for parameterized CPU/instruction tests. Coverage is measured in CI and published as the badge at the top of this file.
 
 ## Contributing
 

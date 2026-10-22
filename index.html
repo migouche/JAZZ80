@@ -1,8 +1,14 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8">
-    <title>Z80 Simulator</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="An interactive Zilog Z80 CPU simulator, editor, and debugger written in Rust and WebAssembly. Run Z80 assembly directly in your browser.">
+    <meta name="keywords" content="JAZZ80, Z80 simulator, Zilog Z80, CPU emulator, Rust, WebAssembly, URJC">    <meta name="theme-color" content="#0d0d12">
+    <meta name="google-site-verification" content="qHgfu6uRBRiDruoG-so5YUZPpXkPxofsC650_LvyVqM" />
+    <meta name="color-scheme" content="dark">
+    <title>JAZZ80 — Z80 Simulator</title>
+    <link rel="icon" href="docs/logo.svg" type="image/svg+xml">
     <link data-trunk rel="copy-dir" href="z80 files" />
     <link data-trunk rel="copy-dir" href="docs" />
     <style>
@@ -121,19 +127,68 @@
         color: #ffb3ec;
         border-bottom-color: #ffb3ec;
       }
+      .error-text {
+        margin-top: 18px;
+        max-width: 34rem;
+        padding: 0 1rem;
+        font-family: ui-monospace, "Courier New", monospace;
+        font-size: 13px;
+        line-height: 1.6;
+        text-align: center;
+        color: #ff9a9a;
+      }
+      .error-text a { color: #58e6ff; }
     </style>
   </head>
   <body>
     <div id="loading">
-      <img src="docs/logo.svg" alt="Z80 Simulator">
+      <img src="docs/logo.svg" alt="JAZZ80 logo">
       <div class="spinner"></div>
       <div class="loading-text">Initializing CPU&hellip;</div>
       <p class="credit">
-        Logo designed by my wonderful girlfriend,
-        <a href="https://example.com" target="_blank" rel="noopener">Gea Kristek</a>
+        Logo designed by my wonderful girlfriend, Gea Kristek
       </p>
     </div>
     <!-- The wasm code will resize this canvas to cover the entire window -->
     <canvas id="z80-simulator-canvas"></canvas>
+    <noscript>
+      <style>
+        #loading { display: none !important; }
+        .no-js {
+          position: fixed;
+          inset: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: #0d0d12;
+          z-index: 10000;
+        }
+      </style>
+      <div class="no-js">
+        <p class="error-text">
+          JAZZ80 needs JavaScript and WebAssembly to run. Please enable JavaScript and reload the page.
+        </p>
+      </div>
+    </noscript>
+    <script>
+      // If the module fails to load (old browser, network error, missing
+      // WebAssembly support), the loading screen would otherwise spin forever.
+      (function () {
+        var loading = document.getElementById("loading");
+        var timer = setTimeout(function () {
+          if (!loading || loading.classList.contains("hidden")) return;
+          loading.innerHTML =
+            '<p class="error-text">JAZZ80 could not start.<br>' +
+            "Your browser may not support WebAssembly, or the download failed.<br>" +
+            '<a href="">Reload the page</a></p>';
+        }, 20000);
+
+        if (loading && window.MutationObserver) {
+          new MutationObserver(function () {
+            if (loading.classList.contains("hidden")) clearTimeout(timer);
+          }).observe(loading, { attributes: true, attributeFilter: ["class"] });
+        }
+      })();
+    </script>
   </body>
 </html>

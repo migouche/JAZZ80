@@ -2,6 +2,7 @@ mod assembler;
 mod components;
 mod cpu;
 mod emulator;
+#[cfg(target_arch = "wasm32")]
 mod examples;
 mod gui;
 mod traits;

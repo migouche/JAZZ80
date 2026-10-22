@@ -15,6 +15,7 @@ use crate::ui_traits::DeviceWithUi;
 pub mod exec;
 mod formatting;
 mod highlighting;
+mod theme;
 
 #[cfg(target_arch = "wasm32")]
 use std::sync::mpsc::{Receiver, channel};
@@ -33,9 +34,23 @@ export function download_file(filename, text) {
     element.click();
     document.body.removeChild(element);
 }
+
+export function download_bytes(filename, data) {
+    var blob = new Blob([data], { type: 'application/octet-stream' });
+    var url = URL.createObjectURL(blob);
+    var element = document.createElement('a');
+    element.setAttribute('href', url);
+    element.setAttribute('download', filename);
+    element.style.display = 'none';
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+}
 ")]
 extern "C" {
     fn download_file(filename: &str, text: &str);
+    fn download_bytes(filename: &str, data: &[u8]);
 }
 
 #[derive(Clone)]
@@ -48,6 +63,8 @@ enum HeaderAction {
     AssembleBinary,
     LoadBinary,
     CloseTab(usize),
+    ToggleRun,
+    StepInstruction,
     Quit,
 }
 
@@ -86,6 +103,13 @@ pub struct EditorTab {
     pub binary_bytes: Option<Vec<u8>>,
 }
 
+/// A persisted description of an attached device.
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
+pub struct DeviceSpec {
+    pub menu_name: String,
+    pub port: u16,
+}
+
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct Z80App {
@@ -97,6 +121,10 @@ pub struct Z80App {
 
     #[serde(skip)]
     last_error: Option<String>,
+    /// Non-error feedback (saves, cancellations, capability notes). Kept
+    /// separate from `last_error` so it never blocks execution.
+    #[serde(skip)]
+    status_message: Option<String>,
     #[serde(skip)]
     symbol_table: HashMap<String, Symbol>,
     #[serde(skip)]
@@ -112,35 +140,59 @@ pub struct Z80App {
     #[serde(skip)]
     pending_modal: Option<ModalType>,
     #[serde(skip)]
-    loaded_file_name: String,
-    #[serde(skip)]
     code_theme: highlighting::CodeTheme,
 
     #[serde(skip)]
     attached_devices: Vec<Arc<Mutex<dyn DeviceWithUi>>>,
+    /// Serialisable description of the attached devices, so they survive a
+    /// restart. The devices themselves hold UI/hardware state that is rebuilt.
+    #[serde(default)]
+    attached_device_specs: Vec<DeviceSpec>,
+
+    #[serde(skip)]
+    theme: theme::AppTheme,
 
     #[cfg(target_arch = "wasm32")]
     #[serde(skip)]
     file_receiver: Option<Receiver<(String, String)>>,
 
+    #[cfg(target_arch = "wasm32")]
+    #[serde(skip)]
+    binary_file_receiver: Option<Receiver<(String, Vec<u8>)>>,
+
+    /// Example names advertised by the bundled `examples.json` (web only).
+    #[cfg(target_arch = "wasm32")]
     #[serde(skip)]
     examples_list: Vec<String>,
+
     #[cfg(target_arch = "wasm32")]
     #[serde(skip)]
     examples_receiver: Option<Receiver<Vec<String>>>,
+
+    #[cfg(target_arch = "wasm32")]
+    #[serde(skip)]
+    example_file_receiver: Option<Receiver<Result<(String, Vec<u8>), String>>>,
 
     recent_files: Vec<PathBuf>,
 
     #[serde(skip)]
     show_memory_viewer: bool,
     #[serde(skip)]
+    show_shortcuts: bool,
+    #[serde(skip)]
     memory_viewer_start: String,
+    #[serde(skip)]
+    memory_follow_pc: bool,
 
     // Location Counter toggle and state tracking
     #[serde(default)]
     show_location_counter: bool,
     #[serde(skip)]
     is_assembly_stale: bool,
+    /// Whether a program has been successfully assembled/loaded into the
+    /// current machine. Run/Step are disabled until this is true.
+    #[serde(skip)]
+    program_loaded: bool,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -220,30 +272,48 @@ impl Default for ExecutionState {
     }
 }
 
-fn reg_value(snapshot: &MachineSnapshot, gpr: GPR) -> u8 {
+fn gpr_index(gpr: GPR) -> usize {
     match gpr {
-        GPR::A => snapshot.regs[0],
-        GPR::F => snapshot.regs[1],
-        GPR::B => snapshot.regs[2],
-        GPR::C => snapshot.regs[3],
-        GPR::D => snapshot.regs[4],
-        GPR::E => snapshot.regs[5],
-        GPR::H => snapshot.regs[6],
-        GPR::L => snapshot.regs[7],
+        GPR::A => 0,
+        GPR::F => 1,
+        GPR::B => 2,
+        GPR::C => 3,
+        GPR::D => 4,
+        GPR::E => 5,
+        GPR::H => 6,
+        GPR::L => 7,
     }
 }
 
-fn shadow_reg_value(snapshot: &MachineSnapshot, gpr: GPR) -> u8 {
-    match gpr {
-        GPR::A => snapshot.shadow_regs[0],
-        GPR::F => snapshot.shadow_regs[1],
-        GPR::B => snapshot.shadow_regs[2],
-        GPR::C => snapshot.shadow_regs[3],
-        GPR::D => snapshot.shadow_regs[4],
-        GPR::E => snapshot.shadow_regs[5],
-        GPR::H => snapshot.shadow_regs[6],
-        GPR::L => snapshot.shadow_regs[7],
+/// Parse a hexadecimal number. Accepts an optional `0x`, `$` or `#` prefix,
+/// surrounding whitespace and `_` digit separators — all of which users type
+/// naturally when editing a register.
+fn parse_hex_u16(text: &str) -> Option<u16> {
+    let cleaned = text.trim().replace('_', "");
+    let digits = cleaned
+        .strip_prefix("0x")
+        .or_else(|| cleaned.strip_prefix("0X"))
+        .or_else(|| cleaned.strip_prefix('$'))
+        .or_else(|| cleaned.strip_prefix('#'))
+        .unwrap_or(&cleaned);
+    if digits.is_empty() {
+        return None;
     }
+    u16::from_str_radix(digits, 16).ok()
+}
+
+fn parse_hex_u8(text: &str) -> Option<u8> {
+    let cleaned = text.trim().replace('_', "");
+    let digits = cleaned
+        .strip_prefix("0x")
+        .or_else(|| cleaned.strip_prefix("0X"))
+        .or_else(|| cleaned.strip_prefix('$'))
+        .or_else(|| cleaned.strip_prefix('#'))
+        .unwrap_or(&cleaned);
+    if digits.is_empty() {
+        return None;
+    }
+    u8::from_str_radix(digits, 16).ok()
 }
 
 fn snapshot_flag(snapshot: &MachineSnapshot, flag: Flag) -> bool {
@@ -256,6 +326,67 @@ fn snapshot_flag(snapshot: &MachineSnapshot, flag: Flag) -> bool {
         Flag::PV => snapshot.flags.pv,
         Flag::N => snapshot.flags.n,
         Flag::C => snapshot.flags.c,
+    }
+}
+
+/// Build a URL for a file inside the bundled `z80 files` directory on the web.
+/// Resolves relative to the deployed page so sub-path deployments keep working.
+#[cfg(target_arch = "wasm32")]
+fn z80_files_url(file: &str) -> Option<String> {
+    let window = web_sys::window()?;
+    let location = window.location();
+    let origin = location.origin().ok()?;
+    let pathname = location.pathname().ok()?;
+
+    let base = if pathname.ends_with('/') {
+        pathname
+    } else if let Some(slash) = pathname.rfind('/') {
+        pathname[..=slash].to_string()
+    } else {
+        "/".to_string()
+    };
+
+    Some(format!("{origin}{base}z80%20files/{file}"))
+}
+
+fn flag_description(flag: Flag) -> &'static str {
+    match flag {
+        Flag::S => "Sign — copy of bit 7 of the result",
+        Flag::Z => "Zero — result was zero",
+        Flag::Y => "Undocumented bit 5 copy",
+        Flag::H => "Half carry — carry out of bit 3",
+        Flag::X => "Undocumented bit 3 copy",
+        Flag::PV => "Parity / overflow",
+        Flag::N => "Add/subtract — last operation was subtraction",
+        Flag::C => "Carry — carry out of bit 7",
+    }
+}
+
+/// Render an EQU constant using the same display formats as memory variables.
+/// Constants have no address, so their numeric value is treated as a 16-bit
+/// little-endian value (matching how Word symbols are laid out in memory).
+fn format_constant_value(value: u16, format: SymbolDisplayFormat) -> String {
+    let low = (value & 0xFF) as u8;
+    let high = (value >> 8) as u8;
+
+    match format {
+        SymbolDisplayFormat::Default => format!("0x{value:04X}"),
+        SymbolDisplayFormat::String => {
+            let mut text = String::new();
+            for byte in [low, high] {
+                if byte == 0 {
+                    break;
+                }
+                text.push(if (32..=126).contains(&byte) {
+                    byte as char
+                } else {
+                    '.'
+                });
+            }
+            format!("\"{text}\"")
+        }
+        SymbolDisplayFormat::HexBytes => format!("[{low:02X} {high:02X}]"),
+        SymbolDisplayFormat::HexWords => format!("[{value:04X}]"),
     }
 }
 
@@ -333,6 +464,21 @@ START:
                 egui::Key::O,
                 HeaderAction::OpenFileDialog,
             ),
+            (
+                egui::Modifiers::NONE,
+                egui::Key::F5,
+                HeaderAction::ToggleRun,
+            ),
+            (
+                egui::Modifiers::NONE,
+                egui::Key::F8,
+                HeaderAction::StepInstruction,
+            ),
+            (
+                egui::Modifiers::COMMAND,
+                egui::Key::W,
+                HeaderAction::CloseTab(usize::MAX),
+            ),
         ]
     }
     /*
@@ -367,12 +513,47 @@ START:
         action
     }
 
-    fn load_and_reset(&mut self) {
-        self.exec.machine = if self.exec.machine.is_some() {
-            self.exec.machine.take()
-        } else {
-            Some(self.exec.runner.take_machine())
+    fn active_tab_name(&self) -> String {
+        self.tabs
+            .get(self.active_tab)
+            .and_then(|t| t.path.as_ref())
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("Untitled")
+            .to_string()
+    }
+
+    fn active_tab_path(&self) -> Option<String> {
+        self.tabs
+            .get(self.active_tab)
+            .and_then(|t| t.path.as_ref())
+            .map(|p| p.display().to_string())
+    }
+
+    /// Recreate a device from its persisted description.
+    fn attach_device_spec(&mut self, spec: &DeviceSpec) {
+        let Some(definition) = crate::components::devices::device_definitions()
+            .iter()
+            .find(|d| d.menu_name == spec.menu_name)
+        else {
+            return;
         };
+        let dev = (definition.create)(spec.port);
+        if let Some(machine) = self.exec.machine.as_mut() {
+            machine.cpu.attach_device(dev.clone());
+        }
+        self.attached_devices.push(dev);
+    }
+
+    fn load_and_reset(&mut self) {
+        // A "reset" must actually reset the CPU. Previously the machine was
+        // reused, so registers (and PC) survived Assemble & Reset. Recreate it
+        // and re-attach the devices instead.
+        if self.exec.machine.is_none() {
+            // The runner owned it; reclaim and drop it.
+            let _ = self.exec.runner.take_machine();
+        }
+        self.exec.machine = Some(Machine::new());
         let machine = self.exec.machine.as_mut().unwrap();
         for device in &self.attached_devices {
             device.lock().unwrap().reset();
@@ -383,19 +564,13 @@ START:
         self.exec.last_stop_addr = None;
 
         if self.tabs.is_empty() {
+            self.program_loaded = false;
             self.refresh_snapshot();
             return;
         }
 
         let active = self.active_tab;
         let active_tab = &self.tabs[active];
-        self.loaded_file_name = active_tab
-            .path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("Untitled")
-            .to_string();
 
         if active_tab.kind == EditorTabKind::Binary {
             self.symbol_table.clear();
@@ -405,13 +580,22 @@ START:
             self.is_assembly_stale = false;
             self.last_error = None;
 
-            if let Some(bytes) = active_tab.binary_bytes.clone() {
+            // `binary_bytes` is not serialised, so a tab restored from storage
+            // only has its hexdump. Recover the bytes from the dump instead of
+            // leaving a dead tab behind.
+            let bytes = active_tab
+                .binary_bytes
+                .clone()
+                .or_else(|| formatting::parse_hexdump(&active_tab.code));
+            if let Some(bytes) = bytes {
                 let mem = machine.memory_mut();
                 for (i, b) in bytes.iter().enumerate() {
                     mem.write(i as u16, *b);
                 }
+                self.program_loaded = true;
             } else {
-                self.last_error = Some("Binary tab is missing raw bytes".to_string());
+                self.program_loaded = false;
+                self.last_error = Some("Binary tab is missing its raw bytes".to_string());
             }
             self.sync_breakpoints();
             self.refresh_snapshot();
@@ -448,8 +632,10 @@ START:
         self.is_assembly_stale = false;
 
         if let Some(err) = error {
+            self.program_loaded = false;
             self.last_error = Some(err);
         } else {
+            self.program_loaded = true;
             self.last_error = None;
             let mem = machine.memory_mut();
             let image_addr_set: HashSet<u16> = image.iter().map(|(addr, _)| *addr).collect();
@@ -530,6 +716,56 @@ START:
         self.refresh_snapshot();
     }
 
+    fn step_instruction(&mut self) {
+        if !self.program_loaded && !self.exec.is_running {
+            return;
+        }
+        if self.exec.is_running {
+            self.exec.runner.send_command(Command::Tick);
+        } else if let Some(machine) = self.exec.machine.as_mut() {
+            machine.cpu.tick();
+            self.refresh_snapshot();
+        }
+    }
+
+    fn resume_from_halt(&mut self) {
+        if self.exec.is_running {
+            self.exec.runner.send_command(Command::Resume);
+        } else if let Some(machine) = self.exec.machine.as_mut() {
+            machine.cpu.set_halted(false);
+            self.refresh_snapshot();
+        }
+    }
+
+    /// The primary toolbar action: Stop while running, otherwise un-halt (if
+    /// needed) and start running.
+    fn toggle_execution(&mut self) {
+        if self.exec.is_running {
+            self.stop_execution();
+            return;
+        }
+        if !self.program_loaded {
+            return;
+        }
+
+        if self.exec.snapshot.halted {
+            if let Some(machine) = self.exec.machine.as_mut() {
+                machine.cpu.set_halted(false);
+            }
+            self.refresh_snapshot();
+        }
+
+        if self.exec.breakpoint_addrs.contains(&self.exec.snapshot.pc)
+            && let Some(machine) = self.exec.machine.as_mut()
+        {
+            // Standing on a breakpoint would stop again immediately; step over.
+            machine.cpu.tick();
+            self.refresh_snapshot();
+        }
+
+        self.start_execution();
+    }
+
     fn save_to_storage(&self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
         if let Some(storage) = storage {
             eframe::set_value(storage, STORAGE_KEY, self);
@@ -538,6 +774,8 @@ START:
     }
 
     pub fn new(cc: &eframe::CreationContext) -> Self {
+        theme::apply(&cc.egui_ctx);
+
         let mut app = if let Some(storage) = cc.storage {
             match eframe::get_value::<Z80App>(storage, STORAGE_KEY) {
                 Some(mut loaded_app) => {
@@ -558,6 +796,21 @@ START:
         } else {
             Self::default()
         };
+
+        // Devices are not serialised directly; rebuild them from their specs.
+        let specs = app.attached_device_specs.clone();
+        for spec in &specs {
+            app.attach_device_spec(spec);
+        }
+
+        for tab in &mut app.tabs {
+            if tab.kind == EditorTabKind::Binary && tab.binary_bytes.is_none() {
+                tab.binary_bytes = formatting::parse_hexdump(&tab.code);
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        app.start_examples_fetch(&cc.egui_ctx);
 
         app.load_and_reset();
         app
@@ -590,6 +843,7 @@ START:
             let (sender, receiver) = channel();
             self.file_receiver = Some(receiver);
 
+            let ctx = ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let file = task.await;
                 if let Some(file) = file {
@@ -598,6 +852,7 @@ START:
                     if let Ok(text) = String::from_utf8(content) {
                         sender.send((name, text)).ok();
                     }
+                    ctx.request_repaint();
                 }
             });
         }
@@ -618,21 +873,28 @@ START:
     }
 
     fn close_tab(&mut self, index: usize, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
-        if index < self.tabs.len() {
-            self.tabs.remove(index);
-            if self.tabs.is_empty() {
-                self.new_file(storage); // Ensure at least one tab
-            } else {
-                if self.active_tab >= self.tabs.len() {
-                    self.active_tab = self.tabs.len() - 1;
-                }
+        if index >= self.tabs.len() {
+            return;
+        }
+        let closed_active = index == self.active_tab;
+        self.tabs.remove(index);
+
+        if self.tabs.is_empty() {
+            self.new_file(storage); // Ensure at least one tab
+            self.load_and_reset();
+        } else {
+            if closed_active {
+                // Show the neighbouring tab; its source is not what is loaded.
+                self.active_tab = index.min(self.tabs.len() - 1);
                 self.is_assembly_stale = true;
-                self.save_to_storage(storage);
+            } else if index < self.active_tab {
+                // Keep pointing at the same document.
+                self.active_tab -= 1;
             }
+            self.save_to_storage(storage);
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn open_binary_tab(
         &mut self,
         path: PathBuf,
@@ -697,11 +959,10 @@ START:
         self.save_to_storage(storage);
     }
 
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
     fn open_file(
         &mut self,
         path: PathBuf,
-        ctx: &egui::Context,
+        _ctx: &egui::Context,
         storage: Option<&mut (dyn eframe::Storage + 'static)>,
     ) {
         // Check if already open
@@ -736,44 +997,141 @@ START:
         // is an example that can be fetched from the server by name.
         #[cfg(target_arch = "wasm32")]
         {
-            self.load_example(path.to_string_lossy().into_owned(), ctx.clone());
+            self.load_example(path.to_string_lossy().into_owned(), _ctx, storage);
         }
     }
 
+    /// Fetch the list of example names from the bundled `examples.json`.
+    /// Examples are a web-only feature: the browser build cannot browse a
+    /// filesystem, so Trunk copies the `z80 files` folder next to the app.
     #[cfg(target_arch = "wasm32")]
-    fn load_example(&mut self, filename: String, ctx: egui::Context) {
-        let (sender, receiver) = channel();
-        self.file_receiver = Some(receiver);
-
-        let location = web_sys::window().unwrap().location();
-        let origin = location.origin().unwrap();
-        let pathname = location.pathname().unwrap();
-        // Ensure pathname ends in slash or strip filename if present (basic heuristic)
-        let base_path = if pathname.ends_with('/') {
-            pathname
-        } else if let Some(last_slash) = pathname.rfind('/') {
-            pathname[0..=last_slash].to_string()
-        } else {
-            "/".to_string()
+    fn start_examples_fetch(&mut self, ctx: &egui::Context) {
+        let Some(url) = z80_files_url("examples.json") else {
+            return;
         };
 
-        let url = format!("{}{}z80%20files/{}", origin, base_path, filename);
-        let name = filename;
+        let (sender, receiver) = channel();
+        self.examples_receiver = Some(receiver);
 
+        let ctx = ctx.clone();
         wasm_bindgen_futures::spawn_local(async move {
             match reqwest::get(&url).await {
-                Ok(resp) => {
-                    if let Ok(text) = resp.text().await {
-                        let _ = sender.send((name, text));
-                        ctx.request_repaint();
+                Ok(response) if response.status().is_success() => {
+                    match response.json::<Vec<String>>().await {
+                        Ok(examples) => {
+                            sender.send(examples).ok();
+                        }
+                        Err(err) => {
+                            web_sys::console::error_1(
+                                &format!("Failed to parse examples.json: {err}").into(),
+                            );
+                        }
                     }
                 }
-                Err(_) => {}
+                Ok(response) => {
+                    web_sys::console::error_1(
+                        &format!("examples.json returned {}", response.status()).into(),
+                    );
+                }
+                Err(err) => {
+                    web_sys::console::error_1(
+                        &format!("Failed to fetch examples.json: {err}").into(),
+                    );
+                }
             }
+            ctx.request_repaint();
         });
     }
 
+    /// Fetch one bundled example by name and hand it to the editor. Text files
+    /// are opened as source; `.bin` files open in the read-only binary tab.
+    #[cfg(target_arch = "wasm32")]
+    fn load_example(
+        &mut self,
+        filename: String,
+        ctx: &egui::Context,
+        _storage: Option<&mut (dyn eframe::Storage + 'static)>,
+    ) {
+        let Some(url) = z80_files_url(&filename) else {
+            self.last_error = Some("Could not determine the examples URL".into());
+            return;
+        };
+
+        let (sender, receiver) = channel();
+        self.example_file_receiver = Some(receiver);
+
+        let ctx = ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = match reqwest::get(&url).await {
+                Ok(response) if response.status().is_success() => match response.bytes().await {
+                    Ok(bytes) => Ok((filename.clone(), bytes.to_vec())),
+                    Err(err) => Err(format!("Failed to read example '{filename}': {err}")),
+                },
+                Ok(response) => Err(format!(
+                    "Failed to load example '{filename}': HTTP {}",
+                    response.status()
+                )),
+                Err(err) => Err(format!("Failed to load example '{filename}': {err}")),
+            };
+            sender.send(result).ok();
+            ctx.request_repaint();
+        });
+    }
+
+    /// Save every dirty tab. Returns true when nothing is dirty afterwards
+    /// (i.e. every save completed and wasn't cancelled).
+    fn save_all(&mut self, mut storage: Option<&mut (dyn eframe::Storage + 'static)>) -> bool {
+        let prev_active = self.active_tab;
+        for i in 0..self.tabs.len() {
+            if self.tabs[i].is_dirty {
+                // `save_file` treats the active tab specially (untitled files
+                // need the Save As dialog), so activate each tab in turn.
+                self.active_tab = i;
+                self.save_file(i, storage.as_deref_mut());
+                if self.tabs[i].is_dirty {
+                    // Cancelled or failed: stop asking about further tabs.
+                    break;
+                }
+            }
+        }
+        self.active_tab = prev_active;
+        !self.tabs.iter().any(|tab| tab.is_dirty)
+    }
+
+    fn remove_device(&mut self, idx: usize) {
+        if idx >= self.attached_devices.len() {
+            return;
+        }
+        let name = self.attached_devices[idx].lock().unwrap().get_name();
+        self.attached_devices.remove(idx);
+        if idx < self.attached_device_specs.len() {
+            self.attached_device_specs.remove(idx);
+        }
+
+        // Detach immediately rather than waiting for the next reset: a device
+        // the user removed should stop responding to I/O right away.
+        if let Some(machine) = self.exec.machine.as_mut() {
+            machine.cpu.clear_devices();
+            for dev in &self.attached_devices {
+                machine.cpu.attach_device(dev.clone());
+            }
+        }
+        self.status_message = Some(format!("Removed {name}"));
+    }
+
     fn save_file(&mut self, tab_idx: usize, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
+        // A binary tab's `code` is a hexdump, not source. Writing it back would
+        // destroy the .bin file it was loaded from.
+        if self
+            .tabs
+            .get(tab_idx)
+            .is_some_and(|tab| tab.kind == EditorTabKind::Binary)
+        {
+            self.status_message =
+                Some("Binary tabs are read-only. Use File → Assemble Binary to export.".into());
+            return;
+        }
+
         #[cfg(target_arch = "wasm32")]
         {
             // On Wasm, we always use "Save As" behavior because we can't write to disk silently
@@ -784,7 +1142,8 @@ START:
                 // For now, only save active tab or ignore.
                 // Or temporarily switch active tab?
                 // Simpler to just warn.
-                self.last_error = Some("Can only save active file on web".to_string());
+                self.status_message =
+                    Some("Only the active file can be saved on the web".to_string());
             }
             return;
         }
@@ -798,12 +1157,14 @@ START:
                     self.last_error = Some(format!("Failed to save file: {}", err));
                 } else {
                     tab.is_dirty = false;
+                    self.status_message = Some(format!("Saved {}", path_clone.display()));
                 }
             } else {
                 if tab_idx == self.active_tab {
                     self.save_file_as(storage);
                 } else {
-                    self.last_error = Some("Cannot save untitled file in background".to_string());
+                    self.status_message =
+                        Some("Only the active untitled file can be saved".to_string());
                 }
                 return;
             }
@@ -827,6 +1188,7 @@ START:
             } else {
                 tab.path = Some(path.clone());
                 tab.is_dirty = false;
+                self.status_message = Some(format!("Saved {}", path.display()));
                 self.add_recent_file(path);
                 self.save_to_storage(storage);
             }
@@ -843,6 +1205,7 @@ START:
                 .unwrap_or("program.asm");
 
             download_file(name, &tab.code);
+            self.status_message = Some(format!("Downloaded {name}"));
 
             tab.is_dirty = false;
             self.save_to_storage(storage);
@@ -868,6 +1231,11 @@ START:
                         self.last_error = Some(format!("Failed to export binary: {}", err));
                     } else {
                         self.last_error = None;
+                        self.status_message = Some(format!(
+                            "Exported {} ({} bytes)",
+                            path.display(),
+                            bytes.len()
+                        ));
                         self.add_recent_file(path);
                         self.save_to_storage(storage);
                     }
@@ -884,20 +1252,17 @@ START:
                         .unwrap_or("program")
                         .to_string()
                         + ".bin";
-                    let hex = bytes
-                        .iter()
-                        .map(|b| format!("{:02X}", b))
-                        .collect::<Vec<_>>()
-                        .join("");
-                    download_file(&name, &hex);
+                    download_bytes(&name, &bytes);
                     self.last_error = None;
+                    self.status_message =
+                        Some(format!("Exported {} ({} bytes)", name, bytes.len()));
                     self.save_to_storage(storage);
                     return;
                 }
 
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    self.last_error = Some("Binary export was cancelled".to_string());
+                    self.status_message = Some("Binary export cancelled".to_string());
                 }
             }
             Err(err) => {
@@ -915,11 +1280,6 @@ START:
         match std::fs::read(&path) {
             Ok(bytes) => {
                 self.open_binary_tab(path.clone(), bytes, storage);
-                self.loaded_file_name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("program.bin")
-                    .to_string();
                 self.exec.is_running = false;
                 self.last_error = None;
             }
@@ -930,7 +1290,11 @@ START:
     }
 
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
-    fn load_binary_dialog(&mut self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
+    fn load_binary_dialog(
+        &mut self,
+        _ctx: &egui::Context,
+        storage: Option<&mut (dyn eframe::Storage + 'static)>,
+    ) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Binary", &["bin", "rom", "com"])
@@ -942,7 +1306,23 @@ START:
 
         #[cfg(target_arch = "wasm32")]
         {
-            self.last_error = Some("Binary import is not supported in the web build".to_string());
+            let task = rfd::AsyncFileDialog::new()
+                .add_filter("Binary", &["bin", "rom", "com"])
+                .add_filter("All files", &["*"])
+                .pick_file();
+
+            let (sender, receiver) = channel();
+            self.binary_file_receiver = Some(receiver);
+
+            let ctx = _ctx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Some(file) = task.await {
+                    let name = file.file_name();
+                    let bytes = file.read().await;
+                    sender.send((name, bytes)).ok();
+                    ctx.request_repaint();
+                }
+            });
         }
     }
 
@@ -959,14 +1339,24 @@ START:
             HeaderAction::SaveFile => self.save_file(self.active_tab, frame.storage_mut()),
             HeaderAction::SaveFileAs => self.save_file_as(frame.storage_mut()),
             HeaderAction::AssembleBinary => self.assemble_binary_to_file(frame.storage_mut()),
-            HeaderAction::LoadBinary => self.load_binary_dialog(frame.storage_mut()),
+            HeaderAction::LoadBinary => self.load_binary_dialog(ctx, frame.storage_mut()),
             HeaderAction::CloseTab(idx) => {
+                let idx = if idx == usize::MAX {
+                    self.active_tab
+                } else {
+                    idx
+                };
+                if idx >= self.tabs.len() {
+                    return;
+                }
                 if self.tabs[idx].is_dirty {
                     self.pending_modal = Some(ModalType::CloseTab(idx));
                 } else {
                     self.close_tab(idx, frame.storage_mut());
                 }
             }
+            HeaderAction::ToggleRun => self.toggle_execution(),
+            HeaderAction::StepInstruction => self.step_instruction(),
             HeaderAction::Quit => {
                 // This triggers on_close_event
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1000,47 +1390,90 @@ START:
             egui::Window::new("Memory Viewer")
                 .open(&mut show_mem)
                 .resizable(true)
-                .default_width(500.0)
-                .default_height(400.0)
+                .default_width(560.0)
+                .default_height(430.0)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Start Address (Hex):");
+                        ui.label("Start (hex):");
                         let response = ui.add(
                             egui::TextEdit::singleline(&mut self.memory_viewer_start)
-                                .desired_width(60.0)
-                                .font(egui::TextStyle::Monospace),
+                                .desired_width(64.0)
+                                .font(egui::TextStyle::Monospace)
+                                .hint_text("0000"),
                         );
-                        if ui.button("Goto PC").clicked() {
+                        if ui
+                            .small_button("◀")
+                            .on_hover_text("Previous page (−0x100)")
+                            .clicked()
+                        {
+                            let start = parse_hex_u16(&self.memory_viewer_start).unwrap_or(0);
+                            self.memory_viewer_start = format!("{:04X}", start.wrapping_sub(0x100));
+                        }
+                        if ui
+                            .small_button("▶")
+                            .on_hover_text("Next page (+0x100)")
+                            .clicked()
+                        {
+                            let start = parse_hex_u16(&self.memory_viewer_start).unwrap_or(0);
+                            self.memory_viewer_start = format!("{:04X}", start.wrapping_add(0x100));
+                        }
+                        if ui
+                            .small_button("Goto PC")
+                            .on_hover_text("Jump to the program counter")
+                            .clicked()
+                        {
                             self.memory_viewer_start = format!("{:04X}", self.exec.snapshot.pc);
                             response.request_focus();
                         }
+                        ui.checkbox(&mut self.memory_follow_pc, "Follow PC")
+                            .on_hover_text("Scroll along with the program counter");
+                        ui.label(
+                            egui::RichText::new("read-only")
+                                .small()
+                                .color(self.theme.muted),
+                        );
                     });
+
+                    let valid = parse_hex_u16(&self.memory_viewer_start).is_some();
+                    if !valid {
+                        ui.label(
+                            egui::RichText::new("Enter a hexadecimal address (0000–FFFF)")
+                                .small()
+                                .color(self.theme.danger),
+                        );
+                    }
 
                     ui.separator();
 
-                    let start_addr =
-                        u16::from_str_radix(self.memory_viewer_start.trim(), 16).unwrap_or(0);
-
-                    let rows = 16;
+                    if self.memory_follow_pc {
+                        self.memory_viewer_start = format!("{:04X}", self.exec.snapshot.pc);
+                    }
+                    let start_addr = parse_hex_u16(&self.memory_viewer_start).unwrap_or(0);
+                    let pc = self.exec.snapshot.pc;
 
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         egui::Grid::new("mem_dump_grid")
                             .num_columns(3)
                             .spacing([20.0, 4.0])
                             .show(ui, |ui| {
-                                for r in 0..rows {
-                                    let row_addr = start_addr.wrapping_add((r * 16) as u16);
-
-                                    ui.monospace(format!("{:04X}", row_addr));
+                                for r in 0..16u16 {
+                                    let row_addr = start_addr.wrapping_add(r * 16);
+                                    let has_pc = pc.wrapping_sub(row_addr) < 16;
+                                    let addr_text = egui::RichText::new(format!("{row_addr:04X}"))
+                                        .monospace()
+                                        .color(if has_pc {
+                                            self.theme.pc_marker
+                                        } else {
+                                            self.theme.address
+                                        });
+                                    ui.label(addr_text);
 
                                     let mut hex_str = String::new();
                                     let mut ascii_str = String::new();
-
-                                    for c in 0..16 {
+                                    for c in 0..16u16 {
                                         let addr = row_addr.wrapping_add(c);
                                         let val = self.exec.snapshot.memory[addr as usize];
                                         hex_str.push_str(&format!("{:02X} ", val));
-
                                         if (32..=126).contains(&val) {
                                             ascii_str.push(val as char);
                                         } else {
@@ -1048,7 +1481,8 @@ START:
                                         }
                                     }
 
-                                    ui.monospace(hex_str);
+                                    ui.monospace(hex_str)
+                                        .on_hover_text("Memory is read-only in this view");
                                     ui.monospace(ascii_str);
                                     ui.end_row();
                                 }
@@ -1066,12 +1500,47 @@ START:
     }
 
     fn render_registers_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Registers");
+        ui.horizontal(|ui| {
+            ui.heading("Registers");
+            ui.label(egui::RichText::new("hex").small().color(self.theme.muted))
+                .on_hover_text("All values are hexadecimal. A 0x prefix is accepted.");
+        });
         ui.separator();
 
-        let can_edit = !self.exec.is_running || self.exec.snapshot.halted;
-        let snapshot = self.exec.snapshot.clone();
+        // While a run is in progress the machine lives in the runner thread and
+        // `exec.machine` is `None`, so edits would be silently dropped.
+        let can_edit = self.exec.machine.is_some();
+        if !can_edit {
+            ui.label(
+                egui::RichText::new("Stop the CPU to edit registers")
+                    .small()
+                    .color(self.theme.muted),
+            );
+        }
 
+        // Copy the small scalar fields instead of cloning the whole snapshot
+        // (which carries a 64 KiB memory buffer) every frame.
+        let pc = self.exec.snapshot.pc;
+        let sp = self.exec.snapshot.sp;
+        let ix = self.exec.snapshot.ix;
+        let iy = self.exec.snapshot.iy;
+        let iff1 = self.exec.snapshot.iff1;
+        let iff2 = self.exec.snapshot.iff2;
+        let interrupt_mode = self.exec.snapshot.interrupt_mode;
+        let reg_values = self.exec.snapshot.regs;
+        let shadow_values = self.exec.snapshot.shadow_regs;
+        let flag_states: [(Flag, &str, bool); 8] = [
+            (Flag::S, "S", snapshot_flag(&self.exec.snapshot, Flag::S)),
+            (Flag::Z, "Z", snapshot_flag(&self.exec.snapshot, Flag::Z)),
+            (Flag::Y, "Y", snapshot_flag(&self.exec.snapshot, Flag::Y)),
+            (Flag::H, "H", snapshot_flag(&self.exec.snapshot, Flag::H)),
+            (Flag::X, "X", snapshot_flag(&self.exec.snapshot, Flag::X)),
+            (Flag::PV, "PV", snapshot_flag(&self.exec.snapshot, Flag::PV)),
+            (Flag::N, "N", snapshot_flag(&self.exec.snapshot, Flag::N)),
+            (Flag::C, "C", snapshot_flag(&self.exec.snapshot, Flag::C)),
+        ];
+
+        let theme = self.theme;
         egui::Grid::new("regs_grid")
             .striped(true)
             .spacing([10.0, 8.0])
@@ -1080,24 +1549,34 @@ START:
                     ($name:expr, $getter:expr, $setter:expr) => {
                         ui.label($name);
                         let val = $getter;
-                        let id = egui::Id::new($name);
+                        let id = egui::Id::unique($name);
                         let mut s = ui.data_mut(|d| {
                             d.get_temp_mut_or_insert_with(id, || format!("{:04X}", val))
                                 .clone()
                         });
-                        let resp = ui.add_enabled(
-                            can_edit,
-                            egui::TextEdit::singleline(&mut s)
-                                .desired_width(45.0)
-                                .font(egui::TextStyle::Monospace),
-                        );
+                        let resp = ui
+                            .add_enabled(
+                                can_edit,
+                                egui::TextEdit::singleline(&mut s)
+                                    .desired_width(45.0)
+                                    .font(egui::TextStyle::Monospace),
+                            )
+                            .on_hover_text("Hexadecimal; 0x is optional");
                         if resp.changed() {
-                            if let Ok(v) = u16::from_str_radix(s.trim(), 16) {
+                            if let Some(v) = parse_hex_u16(&s) {
                                 $setter(v);
                             }
-                            ui.data_mut(|d| d.insert_temp(id, s));
+                            ui.data_mut(|d| d.insert_temp(id, s.clone()));
                         } else if !resp.has_focus() {
                             ui.data_mut(|d| d.insert_temp(id, format!("{:04X}", val)));
+                        }
+                        if resp.has_focus() && parse_hex_u16(&s).is_none() {
+                            ui.painter().rect_stroke(
+                                resp.rect,
+                                egui::CornerRadius::same(3),
+                                egui::Stroke::new(1.5, theme.danger),
+                                egui::StrokeKind::Inside,
+                            );
                         }
                     };
                 }
@@ -1106,49 +1585,51 @@ START:
                     ($name:expr, $id:expr, $getter:expr, $setter:expr) => {
                         ui.label($name);
                         let val = $getter;
-                        let id = egui::Id::new($id);
+                        let id = egui::Id::unique($id);
                         let mut s = ui.data_mut(|d| {
                             d.get_temp_mut_or_insert_with(id, || format!("{:02X}", val))
                                 .clone()
                         });
-                        let resp = ui.add_enabled(
-                            can_edit,
-                            egui::TextEdit::singleline(&mut s)
-                                .desired_width(25.0)
-                                .font(egui::TextStyle::Monospace),
-                        );
+                        let resp = ui
+                            .add_enabled(
+                                can_edit,
+                                egui::TextEdit::singleline(&mut s)
+                                    .desired_width(30.0)
+                                    .font(egui::TextStyle::Monospace),
+                            )
+                            .on_hover_text("Hexadecimal; 0x is optional");
                         if resp.changed() {
-                            if let Ok(v) = u8::from_str_radix(s.trim(), 16) {
+                            if let Some(v) = parse_hex_u8(&s) {
                                 $setter(v);
                             }
-                            ui.data_mut(|d| d.insert_temp(id, s));
+                            ui.data_mut(|d| d.insert_temp(id, s.clone()));
                         } else if !resp.has_focus() {
                             ui.data_mut(|d| d.insert_temp(id, format!("{:02X}", val)));
+                        }
+                        if resp.has_focus() && parse_hex_u8(&s).is_none() {
+                            ui.painter().rect_stroke(
+                                resp.rect,
+                                egui::CornerRadius::same(3),
+                                egui::Stroke::new(1.5, theme.danger),
+                                egui::StrokeKind::Inside,
+                            );
                         }
                     };
                 }
 
-                edit_16!("PC", snapshot.pc, |v| {
-                    self.edit_cpu(|m| m.cpu.set_pc(v))
-                });
+                edit_16!("PC", pc, |v| self.edit_cpu(|m| m.cpu.set_pc(v)));
                 ui.label("");
                 ui.label("");
                 ui.end_row();
-                edit_16!("SP", snapshot.sp, |v| {
-                    self.edit_cpu(|m| m.cpu.set_sp(v))
-                });
+                edit_16!("SP", sp, |v| self.edit_cpu(|m| m.cpu.set_sp(v)));
                 ui.label("");
                 ui.label("");
                 ui.end_row();
-                edit_16!("IX", snapshot.ix, |v| {
-                    self.edit_cpu(|m| m.cpu.set_ix(v))
-                });
+                edit_16!("IX", ix, |v| self.edit_cpu(|m| m.cpu.set_ix(v)));
                 ui.label("");
                 ui.label("");
                 ui.end_row();
-                edit_16!("IY", snapshot.iy, |v| {
-                    self.edit_cpu(|m| m.cpu.set_iy(v))
-                });
+                edit_16!("IY", iy, |v| self.edit_cpu(|m| m.cpu.set_iy(v)));
                 ui.label("");
                 ui.label("");
                 ui.end_row();
@@ -1171,15 +1652,13 @@ START:
                 ];
 
                 for (name, gpr) in regs {
-                    edit_8!(name, name, reg_value(&snapshot, gpr), |v| self
+                    let idx = gpr_index(gpr);
+                    edit_8!(name, name, reg_values[idx], |v| self
                         .edit_cpu(|m| m.cpu.set_register(gpr, v)));
                     let shadow_name = format!("{}'", name);
-                    edit_8!(
-                        shadow_name.clone(),
-                        shadow_name,
-                        shadow_reg_value(&snapshot, gpr),
-                        |v| self.edit_cpu(|m| m.cpu.set_shadow_register(gpr, v))
-                    );
+                    edit_8!(shadow_name.clone(), shadow_name, shadow_values[idx], |v| {
+                        self.edit_cpu(|m| m.cpu.set_shadow_register(gpr, v))
+                    });
                     ui.end_row();
                 }
 
@@ -1191,53 +1670,38 @@ START:
 
                 let mono = |text: String| egui::RichText::new(text).monospace();
                 ui.label("IFF1");
-                ui.label(mono(format!("{}", snapshot.iff1)));
+                ui.label(mono(format!("{}", iff1)));
                 ui.label("");
                 ui.label("");
                 ui.end_row();
                 ui.label("IFF2");
-                ui.label(mono(format!("{}", snapshot.iff2)));
+                ui.label(mono(format!("{}", iff2)));
                 ui.label("");
                 ui.label("");
                 ui.end_row();
                 ui.label("IM");
-                ui.label(mono(format!("{}", snapshot.interrupt_mode)));
+                ui.label(mono(format!("{}", interrupt_mode)));
                 ui.label("");
                 ui.label("");
                 ui.end_row();
             });
 
-        ui.add_space(20.0);
+        ui.add_space(16.0);
         ui.heading("Flags");
         ui.separator();
 
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
-            for (flag, label) in [
-                (Flag::S, "S"),
-                (Flag::Z, "Z"),
-                (Flag::Y, "Y"),
-                (Flag::H, "H"),
-                (Flag::X, "X"),
-                (Flag::PV, "PV"),
-                (Flag::N, "N"),
-                (Flag::C, "C"),
-            ] {
-                let on = snapshot_flag(&snapshot, flag);
-                let color = if on {
-                    egui::Color32::from_rgb(0, 255, 0)
+            for (flag, label, on) in flag_states {
+                let (fill, text_color) = if on {
+                    (theme.flag_on, theme.flag_on_text)
                 } else {
-                    egui::Color32::from_rgb(60, 60, 60)
-                };
-                let text_color = if on {
-                    egui::Color32::BLACK
-                } else {
-                    egui::Color32::WHITE
+                    (theme.flag_off, theme.flag_off_text)
                 };
 
                 let text = egui::RichText::new(label).strong().color(text_color);
                 let frame_resp = egui::Frame::new()
-                    .fill(color)
+                    .fill(fill)
                     .corner_radius(4.0)
                     .inner_margin(4.0)
                     .show(ui, |ui| {
@@ -1246,9 +1710,15 @@ START:
 
                 let interact_resp = ui.interact(
                     frame_resp.response.rect,
-                    ui.id().with(label),
+                    ui.scope_id().with(label),
                     egui::Sense::click(),
                 );
+
+                let description = flag_description(flag);
+                interact_resp.clone().on_hover_text(format!(
+                    "{label} — {description}\n{}",
+                    if on { "Set" } else { "Clear" }
+                ));
 
                 if can_edit {
                     if interact_resp.hovered() {
@@ -1263,8 +1733,25 @@ START:
     }
 
     fn add_recent_file(&mut self, path: PathBuf) {
+        // Embedded examples are opened by name and do not exist on disk on
+        // native, so they would produce dead "recent file" entries.
+        #[cfg(not(target_arch = "wasm32"))]
+        if !path.exists() {
+            return;
+        }
+
+        // On the web there is no filesystem, and recent entries are reopened by
+        // looking up an embedded example by name. Only remember those.
+        #[cfg(target_arch = "wasm32")]
+        if !self
+            .examples_list
+            .iter()
+            .any(|name| PathBuf::from(name) == path)
+        {
+            return;
+        }
+
         // Remove if exists to move it to the top
-        println!("Adding recent file: {:?}", path);
         self.recent_files.retain(|p| p != &path);
         self.recent_files.insert(0, path);
 
@@ -1277,41 +1764,6 @@ START:
 
 impl Default for Z80App {
     fn default() -> Self {
-        #[cfg(target_arch = "wasm32")]
-        let (examples_sender, examples_receiver) = channel();
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            wasm_bindgen_futures::spawn_local(async move {
-                // Fetch examples.json
-                let location = web_sys::window().unwrap().location();
-                let origin = location.origin().unwrap();
-                let pathname = location.pathname().unwrap();
-                // Ensure pathname ends in slash or strip filename if present (basic heuristic)
-                let base_path = if pathname.ends_with('/') {
-                    pathname
-                } else if let Some(last_slash) = pathname.rfind('/') {
-                    pathname[0..=last_slash].to_string()
-                } else {
-                    "/".to_string()
-                };
-
-                let url = format!("{}{}z80%20files/examples.json", origin, base_path);
-
-                match reqwest::get(&url).await {
-                    Ok(resp) => {
-                        if !resp.status().is_success() {
-                            return;
-                        }
-                        if let Ok(list) = resp.json::<Vec<String>>().await {
-                            let _ = examples_sender.send(list);
-                        }
-                    }
-                    Err(_) => {}
-                }
-            });
-        }
-
         Self {
             exec: ExecutionState::new(),
             tabs: vec![EditorTab {
@@ -1324,25 +1776,35 @@ impl Default for Z80App {
             }],
             active_tab: 0,
             last_error: None,
+            status_message: None,
             symbol_table: HashMap::new(),
             address_to_line: HashMap::new(),
             line_to_address: HashMap::new(),
             assembly_lines: HashMap::new(),
             symbol_display_prefs: HashMap::new(),
             pending_modal: None,
-            loaded_file_name: "Untitled".to_string(),
             code_theme: highlighting::CodeTheme::one_dark_pro_vivid(),
             recent_files: Vec::new(),
             attached_devices: Vec::new(),
+            attached_device_specs: Vec::new(),
+            theme: theme::AppTheme::ONE_DARK,
             #[cfg(target_arch = "wasm32")]
             file_receiver: None,
+            #[cfg(target_arch = "wasm32")]
+            binary_file_receiver: None,
+            #[cfg(target_arch = "wasm32")]
             examples_list: Vec::new(),
             #[cfg(target_arch = "wasm32")]
-            examples_receiver: Some(examples_receiver),
+            examples_receiver: None,
+            #[cfg(target_arch = "wasm32")]
+            example_file_receiver: None,
             show_memory_viewer: false,
+            show_shortcuts: false,
             memory_viewer_start: "0000".to_string(),
+            memory_follow_pc: false,
             show_location_counter: true,
             is_assembly_stale: false,
+            program_loaded: false,
         }
     }
 }
@@ -1363,12 +1825,56 @@ impl eframe::App for Z80App {
                 }
                 self.file_receiver = Some(receiver);
             }
-
-            if let Some(receiver) = self.examples_receiver.take() {
-                if let Ok(list) = receiver.try_recv() {
-                    self.examples_list = list;
+            if let Some(receiver) = self.binary_file_receiver.take() {
+                while let Ok((name, bytes)) = receiver.try_recv() {
+                    self.open_binary_tab(PathBuf::from(name), bytes, frame.storage_mut());
+                    self.last_error = None;
                 }
-                self.examples_receiver = Some(receiver);
+                self.binary_file_receiver = Some(receiver);
+            }
+            if let Some(receiver) = self.example_file_receiver.take() {
+                while let Ok(result) = receiver.try_recv() {
+                    match result {
+                        Ok((name, bytes)) => {
+                            if name.ends_with(".bin") {
+                                self.open_binary_tab(
+                                    PathBuf::from(&name),
+                                    bytes,
+                                    frame.storage_mut(),
+                                );
+                            } else {
+                                match String::from_utf8(bytes) {
+                                    Ok(text) => {
+                                        self.load_file_content(
+                                            PathBuf::from(&name),
+                                            text,
+                                            frame.storage_mut(),
+                                        );
+                                        self.status_message =
+                                            Some(format!("Loaded example {name}"));
+                                    }
+                                    Err(_) => {
+                                        self.last_error =
+                                            Some(format!("Example '{name}' is not valid UTF-8"));
+                                    }
+                                }
+                            }
+                        }
+                        Err(err) => self.last_error = Some(err),
+                    }
+                }
+                self.example_file_receiver = Some(receiver);
+            }
+            if let Some(receiver) = self.examples_receiver.take() {
+                match receiver.try_recv() {
+                    Ok(examples) => self.examples_list = examples,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        self.examples_receiver = Some(receiver);
+                    }
+                    // The fetch failed (the worker logs the reason). Leave the
+                    // list empty so the menu shows "No examples found".
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+                }
             }
         }
 
@@ -1456,7 +1962,8 @@ impl eframe::App for Z80App {
                         ui.close();
                     }
                     if ui
-                        .button("Load Binary...")
+                        .button("Load Binary…")
+                        .on_hover_text("Open a .bin/.rom image as a read-only tab")
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .clicked()
                     {
@@ -1477,17 +1984,27 @@ impl eframe::App for Z80App {
                 .response
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
 
-                // Added View Menu Option
                 ui.menu_button("View", |ui| {
                     ui.checkbox(&mut self.show_location_counter, "Location Counter");
+                    ui.checkbox(&mut self.show_memory_viewer, "Memory Viewer");
+                    ui.separator();
+                    if ui.button("Keyboard Shortcuts…").clicked() {
+                        self.show_shortcuts = true;
+                        ui.close();
+                    }
                 })
                 .response
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
 
                 ui.menu_button("Devices", |ui| {
+                    ui.label(egui::RichText::new("Add").strong());
                     for definition in crate::components::devices::device_definitions() {
                         if ui
                             .button(definition.menu_name)
+                            .on_hover_text(format!(
+                                "Attach on I/O port {}",
+                                definition.default_port
+                            ))
                             .on_hover_cursor(egui::CursorIcon::PointingHand)
                             .clicked()
                         {
@@ -1501,14 +2018,29 @@ impl eframe::App for Z80App {
 
                     if !self.attached_devices.is_empty() {
                         ui.separator();
-                        ui.label("Manage Windows:");
-                        for dev in &self.attached_devices {
-                            let mut dev_ref = dev.lock().unwrap();
-                            let name = dev_ref.get_name();
-                            let mut open = dev_ref.get_window_open_state();
-                            if ui.checkbox(&mut open, name).changed() {
-                                dev_ref.set_window_open_state(open);
-                            }
+                        ui.label(egui::RichText::new("Attached").strong());
+                        let mut remove = None;
+                        for (idx, dev) in self.attached_devices.iter().enumerate() {
+                            let name = dev.lock().unwrap().get_name();
+                            ui.horizontal(|ui| {
+                                let mut dev_ref = dev.lock().unwrap();
+                                let mut open = dev_ref.get_window_open_state();
+                                if ui.checkbox(&mut open, &name).changed() {
+                                    dev_ref.set_window_open_state(open);
+                                }
+                                drop(dev_ref);
+                                if ui
+                                    .small_button("🗑")
+                                    .on_hover_text(format!("Remove {name}"))
+                                    .clicked()
+                                {
+                                    remove = Some(idx);
+                                }
+                            });
+                        }
+                        if let Some(idx) = remove {
+                            self.remove_device(idx);
+                            ui.close();
                         }
                     }
                 })
@@ -1517,7 +2049,10 @@ impl eframe::App for Z80App {
 
                 ui.menu_button("Memory", |ui| {
                     if ui
-                        .checkbox(&mut self.show_memory_viewer, "Memory Viewer Window")
+                        .checkbox(
+                            &mut self.show_memory_viewer,
+                            "Memory Viewer Window (read-only)",
+                        )
                         .changed()
                     {
                         ui.close();
@@ -1527,25 +2062,44 @@ impl eframe::App for Z80App {
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
 
                 #[cfg(target_arch = "wasm32")]
-                ui.menu_button("Examples", |ui| {
-                    if self.examples_list.is_empty() {
-                        ui.label("No examples found");
-                    } else {
-                        let mut to_load = None;
-                        for ex in &self.examples_list {
-                            if ui
-                                .button(ex)
-                                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .clicked()
-                            {
-                                to_load = Some(ex.clone());
+                {
+                    ui.menu_button("Examples", |ui| {
+                        if self.examples_list.is_empty() {
+                            let message = if self.examples_receiver.is_some() {
+                                "Loading examples…"
+                            } else {
+                                "No examples found"
+                            };
+                            ui.label(message);
+                        } else {
+                            let mut to_load = None;
+                            for ex in &self.examples_list {
+                                if ui
+                                    .button(ex)
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                    .clicked()
+                                {
+                                    to_load = Some(ex.clone());
+                                }
+                            }
+                            if let Some(ex) = to_load {
+                                self.load_example(ex, ui.ctx(), frame.storage_mut());
+                                ui.close();
                             }
                         }
-                        if let Some(ex) = to_load {
-                            self.load_example(ex, ctx.clone());
-                            ui.close();
-                        }
+                    })
+                    .response
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                }
+
+                ui.menu_button("Help", |ui| {
+                    if ui.button("Keyboard Shortcuts…").clicked() {
+                        self.show_shortcuts = true;
+                        ui.close();
                     }
+                    ui.separator();
+                    ui.label(format!("JAZZ80 {}", env!("CARGO_PKG_VERSION")));
+                    ui.label("Z80 simulator");
                 })
                 .response
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -1553,60 +2107,61 @@ impl eframe::App for Z80App {
             ui.separator();
 
             // Toolbar
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if ui
-                    .button("⟳ Load & Reset")
+                    .button("⟳ Assemble & Reset")
+                    .on_hover_text(
+                        "Assemble the active source, reset the CPU and load the program at 0x0000",
+                    )
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
                 {
+                    self.last_error = None;
                     self.load_and_reset();
                 }
 
                 ui.separator();
 
-                if ui
-                    .add_enabled(self.last_error.is_none(), egui::Button::new("⏭ Step"))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .clicked()
-                {
-                    if self.exec.is_running {
-                        self.exec.runner.send_command(Command::Tick);
-                    } else if let Some(machine) = self.exec.machine.as_mut() {
-                        machine.cpu.tick();
-                        self.refresh_snapshot();
-                    }
+                let asset_ok = self.program_loaded || self.exec.is_running;
+                let step_resp = ui
+                    .add_enabled(asset_ok, egui::Button::new("⏭ Step"))
+                    .on_hover_text(if asset_ok {
+                        "Execute one instruction (F8)"
+                    } else {
+                        "Assemble or load a program first"
+                    })
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if step_resp.clicked() {
+                    self.step_instruction();
                 }
 
+                let halted = self.exec.snapshot.halted;
                 let run_label = if self.exec.is_running {
                     "⏸ Stop"
-                } else if self.exec.snapshot.pc > 0 && !self.exec.snapshot.halted {
+                } else if halted {
                     "▶ Resume"
+                } else if self.exec.snapshot.pc > 0 {
+                    "▶ Continue"
                 } else {
                     "▶ Run"
                 };
-                if ui
-                    .add_enabled(self.last_error.is_none(), egui::Button::new(run_label))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .clicked()
-                {
-                    if self.exec.is_running {
-                        self.stop_execution();
+                let run_resp = ui
+                    .add_enabled(asset_ok, egui::Button::new(run_label))
+                    .on_hover_text(if asset_ok {
+                        "Run until a breakpoint or HALT (F5)"
                     } else {
-                        if !self.exec.snapshot.halted
-                            && self.exec.breakpoint_addrs.contains(&self.exec.snapshot.pc)
-                            && let Some(machine) = self.exec.machine.as_mut()
-                        {
-                            machine.cpu.tick();
-                            self.refresh_snapshot();
-                        }
-                        self.start_execution();
-                    }
+                        "Assemble or load a program first"
+                    })
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if run_resp.clicked() {
+                    self.toggle_execution();
                 }
 
                 ui.separator();
 
                 if ui
                     .button("⚡ INT")
+                    .on_hover_text("Raise a maskable interrupt")
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
                 {
@@ -1620,6 +2175,7 @@ impl eframe::App for Z80App {
 
                 if ui
                     .button("⚡ NMI")
+                    .on_hover_text("Raise a non-maskable interrupt")
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
                 {
@@ -1633,42 +2189,98 @@ impl eframe::App for Z80App {
 
                 ui.separator();
 
-                if let Some(err) = &self.last_error {
-                    ui.colored_label(egui::Color32::RED, format!("⚠ {}", err));
-                } else if self.exec.snapshot.halted {
-                    ui.colored_label(egui::Color32::RED, "HALTED");
-                    if ui
-                        .button("Resume")
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .clicked()
-                    {
-                        if self.exec.is_running {
-                            self.exec.runner.send_command(Command::Resume);
-                        } else if let Some(machine) = self.exec.machine.as_mut() {
-                            machine.cpu.set_halted(false);
-                            self.refresh_snapshot();
-                        }
-                    }
+                let (state_text, state_color) = if self.exec.snapshot.halted {
+                    ("HALTED", self.theme.stale)
                 } else if self.exec.is_running {
-                    ui.label(egui::RichText::new("Running").color(egui::Color32::GREEN));
-                } else if let Some(addr) = self.exec.last_stop_addr {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(255, 180, 60),
-                        format!("Stopped at breakpoint 0x{:04X}", addr),
-                    );
+                    ("RUNNING", self.theme.success)
+                } else if self.exec.last_stop_addr.is_some() {
+                    ("AT BREAKPOINT", self.theme.warning)
                 } else {
-                    ui.label(egui::RichText::new("Paused").color(egui::Color32::YELLOW));
+                    ("PAUSED", self.theme.muted)
+                };
+                ui.label(egui::RichText::new(state_text).color(state_color).strong());
+                if let Some(addr) = self.exec.last_stop_addr {
+                    ui.label(
+                        egui::RichText::new(format!("0x{addr:04X}"))
+                            .monospace()
+                            .color(self.theme.warning),
+                    );
                 }
-            });
-            ui.separator();
-            ui.vertical_centered(|ui| {
-                ui.heading(format!("Loaded: {}", self.loaded_file_name));
+
+                if self.exec.snapshot.halted && ui.button("Resume").clicked() {
+                    self.resume_from_halt();
+                }
             });
         });
 
         // Tab Bar Logic (pre-processing to find if we need to close tabs)
         // We'll define the closure later inside central panel?
         // No, let's process actions first. but Tab Bar is part of Central Panel UI.
+
+        // Bottom Status Bar. Added before the side panels so it spans the full
+        // window width, which gives long error messages room to breathe.
+        egui::Panel::bottom("status_bar").show(ui, |ui| {
+            let theme = self.theme;
+            ui.horizontal(|ui| {
+                let name = self.active_tab_name();
+                let path = self.active_tab_path();
+                let dirty = self
+                    .tabs
+                    .get(self.active_tab)
+                    .is_some_and(|tab| tab.is_dirty);
+
+                let mut name_label = egui::RichText::new(name).strong();
+                if dirty {
+                    name_label = name_label.color(theme.warning);
+                }
+                let resp = ui.label(name_label);
+                if let Some(path) = path {
+                    resp.on_hover_text(path);
+                }
+                if dirty {
+                    ui.label(
+                        egui::RichText::new("● unsaved")
+                            .small()
+                            .color(theme.warning),
+                    )
+                    .on_hover_text("This document has unsaved changes");
+                }
+
+                ui.separator();
+                ui.monospace(format!("PC 0x{:04X}", self.exec.snapshot.pc))
+                    .on_hover_text("Program counter");
+                ui.monospace(format!("SP 0x{:04X}", self.exec.snapshot.sp))
+                    .on_hover_text("Stack pointer");
+
+                if self.is_assembly_stale {
+                    ui.label(
+                        egui::RichText::new("source changed since last assemble")
+                            .small()
+                            .color(theme.stale),
+                    )
+                    .on_hover_text(
+                        "Run uses the previously assembled program until you assemble again",
+                    );
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(err) = self.last_error.clone() {
+                        if ui.small_button("✕").on_hover_text("Dismiss").clicked() {
+                            self.last_error = None;
+                        }
+                        let text = format!("⚠ {err}");
+                        ui.label(egui::RichText::new(&text).color(theme.danger).small())
+                            .on_hover_text(err);
+                    } else if let Some(msg) = self.status_message.clone() {
+                        if ui.small_button("✕").on_hover_text("Dismiss").clicked() {
+                            self.status_message = None;
+                        }
+                        ui.label(egui::RichText::new(&msg).color(theme.muted).small())
+                            .on_hover_text(msg);
+                    }
+                });
+            });
+        });
 
         // Right Panel: Registers and Flags
         egui::Panel::right("right_panel")
@@ -1683,25 +2295,37 @@ impl eframe::App for Z80App {
             .resizable(true)
             .default_size(280.0)
             .show(ui, |ui| {
-                ui.heading("Variables");
+                ui.horizontal(|ui| {
+                    ui.heading("Variables").on_hover_text(
+                        "Right-click a variable name to change how its value is displayed",
+                    );
+                    if !self.symbol_display_prefs.is_empty()
+                        && ui
+                            .small_button("Reset formats")
+                            .on_hover_text("Show every variable using its declared type")
+                            .clicked()
+                    {
+                        self.symbol_display_prefs.clear();
+                    }
+                });
                 ui.separator();
 
-                egui::ScrollArea::vertical()
+                egui::ScrollArea::both()
                     .id_salt("vars_scroll")
                     .max_height(200.0)
                     .show(ui, |ui| {
                         egui::Grid::new("vars_grid")
                             .striped(true)
-                            .spacing([20.0, 4.0])
+                            .spacing([8.0, 4.0])
                             .show(ui, |ui| {
                                 ui.label(egui::RichText::new("Name").strong());
                                 ui.label(egui::RichText::new("Addr").strong());
                                 ui.label(egui::RichText::new("Value").strong());
+                                ui.label(egui::RichText::new("Format").strong());
                                 ui.end_row();
 
                                 for (name, symbol) in sorted_symbols.iter().
-                                filter(|s|
-                                    !matches!(s.1.kind, SymbolType::Label | SymbolType::Constant)) {
+                                filter(|s| !matches!(s.1.kind, SymbolType::Label)) {
 
                                     let addr = symbol.address;
 
@@ -1717,34 +2341,25 @@ impl eframe::App for Z80App {
                                         *name
                                     };
 
-                                    // Context menu for format selection
-                                    let label_resp = ui.label(display_name);
-                                    label_resp.context_menu(|ui| {
-                                        ui.label(egui::RichText::new("Display Format").strong());
+                                    // Format selection lives in its own column so it
+                                    // can never displace the address or value.
+                                    ui.label(display_name);
 
-                                        // "Default" implies removing the override
-                                        if ui.button("Default").clicked() {
-                                            self.symbol_display_prefs.remove(*name);
-                                            ui.close();
-                                        }
+                                    let is_constant = symbol.kind == SymbolType::Constant;
+                                    if is_constant {
+                                        ui.label(egui::RichText::new("—").color(self.theme.muted))
+                                            .on_hover_text("EQU constant: has no memory address");
+                                    } else {
+                                        ui.monospace(format!("0x{:04X}", addr));
+                                    }
 
-                                        // Always offer String and Array/Hex options regardless of defined type, as requested
-                                        if ui.button("String").clicked() {
-                                            self.symbol_display_prefs.insert(name.to_string(), SymbolDisplayFormat::String);
-                                            ui.close();
-                                        }
-                                        if ui.button("Hex Bytes").clicked() {
-                                            self.symbol_display_prefs.insert(name.to_string(), SymbolDisplayFormat::HexBytes);
-                                            ui.close();
-                                        }
-                                        if ui.button("Hex Words").clicked() {
-                                            self.symbol_display_prefs.insert(name.to_string(), SymbolDisplayFormat::HexWords);
-                                            ui.close();
-                                        }
-                                    });
-
-                                    ui.monospace(format!("0x{:04X}", addr));
-
+                                    if is_constant {
+                                        ui.monospace(format_constant_value(addr, format))
+                                            .on_hover_text(format!(
+                                                "Assembler constant (EQU) = 0x{:04X}",
+                                                addr
+                                            ));
+                                    } else {
                                     // Render based on format
                                     match format {
                                         SymbolDisplayFormat::Default => {
@@ -1936,6 +2551,68 @@ impl eframe::App for Z80App {
                                             }
                                         }
                                     }
+                                    }
+
+                                    let selected = match format {
+                                        SymbolDisplayFormat::Default => "Default",
+                                        SymbolDisplayFormat::String => "String",
+                                        SymbolDisplayFormat::HexBytes => "Hex bytes",
+                                        SymbolDisplayFormat::HexWords => "Hex words",
+                                    };
+                                    egui::ComboBox::from_id_salt(("vars_fmt", name.as_str()))
+                                        .selected_text(selected)
+                                        .width(78.0)
+                                        .show_ui(ui, |ui| {
+                                            if ui
+                                                .selectable_label(
+                                                    format == SymbolDisplayFormat::Default,
+                                                    "Default",
+                                                )
+                                                .clicked()
+                                            {
+                                                self.symbol_display_prefs.remove(*name);
+                                                ui.close();
+                                            }
+                                            if ui
+                                                .selectable_label(
+                                                    format == SymbolDisplayFormat::String,
+                                                    "String",
+                                                )
+                                                .clicked()
+                                            {
+                                                self.symbol_display_prefs.insert(
+                                                    name.to_string(),
+                                                    SymbolDisplayFormat::String,
+                                                );
+                                                ui.close();
+                                            }
+                                            if ui
+                                                .selectable_label(
+                                                    format == SymbolDisplayFormat::HexBytes,
+                                                    "Hex bytes",
+                                                )
+                                                .clicked()
+                                            {
+                                                self.symbol_display_prefs.insert(
+                                                    name.to_string(),
+                                                    SymbolDisplayFormat::HexBytes,
+                                                );
+                                                ui.close();
+                                            }
+                                            if ui
+                                                .selectable_label(
+                                                    format == SymbolDisplayFormat::HexWords,
+                                                    "Hex words",
+                                                )
+                                                .clicked()
+                                            {
+                                                self.symbol_display_prefs.insert(
+                                                    name.to_string(),
+                                                    SymbolDisplayFormat::HexWords,
+                                                );
+                                                ui.close();
+                                            }
+                                        });
                                     ui.end_row();
                                 }
                             });
@@ -1993,12 +2670,12 @@ impl eframe::App for Z80App {
 
                                 // Visuals
                                 let bg_color = if is_active {
-                                    ui.visuals().selection.bg_fill
+                                    self.theme.tab_active_bg
                                 } else {
                                     ui.visuals().faint_bg_color
                                 };
                                 let fg_color = if is_active {
-                                    ui.visuals().selection.stroke.color
+                                    self.theme.tab_active_fg
                                 } else {
                                     ui.visuals().text_color()
                                 };
@@ -2058,8 +2735,20 @@ impl eframe::App for Z80App {
                                 if resp.response.clicked() {
                                     to_activate = Some(i);
                                 }
+                                if let Some(path) = tab.path.as_ref() {
+                                    resp.response.on_hover_text(path.display().to_string());
+                                }
 
                                 ui.add_space(2.0);
+                            }
+
+                            if ui
+                                .button("+")
+                                .on_hover_text("New file (Ctrl+N)")
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .clicked()
+                            {
+                                action = Some(HeaderAction::NewFile);
                             }
 
                             if let Some(i) = to_activate
@@ -2076,18 +2765,58 @@ impl eframe::App for Z80App {
             ui.separator();
 
             ui.horizontal(|ui| {
-                ui.heading("Assembly Source");
+                let is_binary = self
+                    .tabs
+                    .get(self.active_tab)
+                    .is_some_and(|t| t.kind == EditorTabKind::Binary);
+                ui.heading(if is_binary {
+                    "Binary Image"
+                } else {
+                    "Assembly Source"
+                });
+                if is_binary {
+                    ui.label(
+                        egui::RichText::new("read-only hexdump")
+                            .small()
+                            .color(self.theme.muted),
+                    )
+                    .on_hover_text(
+                        "These are the bytes loaded into memory. Use File → Assemble Binary to export a .bin.",
+                    );
+                }
                 if self.is_assembly_stale {
                     ui.add_space(8.0);
                     ui.label(
-                        egui::RichText::new("⚠ Out of date (re-assemble with Load & Reset)")
-                            .color(egui::Color32::GOLD)
+                        egui::RichText::new("⚠ Out of date (assemble to refresh)")
+                            .color(self.theme.stale)
                             .small(),
+                    )
+                    .on_hover_text(
+                        "The source changed since the last assemble. Run still executes the old program.",
                     );
                 }
             });
 
             if self.active_tab < self.tabs.len() {
+                let highlight_line = if !self.exec.is_running || self.exec.snapshot.halted {
+                    let pc = self.exec.snapshot.pc;
+                    if self.exec.snapshot.halted {
+                        let mut best_match = None;
+                        let mut max_addr = -1i32;
+                        for (&addr, &line) in &self.address_to_line {
+                            if addr < pc && (addr as i32) > max_addr {
+                                max_addr = addr as i32;
+                                best_match = Some(line);
+                            }
+                        }
+                        best_match.or_else(|| self.address_to_line.get(&pc).copied())
+                    } else {
+                        self.address_to_line.get(&pc).copied()
+                    }
+                } else {
+                    None
+                };
+
                 let current_tab = &mut self.tabs[self.active_tab];
 
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -2112,32 +2841,46 @@ impl eframe::App for Z80App {
 
                             // Header for Line
                             ui.label(egui::RichText::new("Line").
-                                font(font_id.clone()).strong().color(egui::Color32::GRAY));
+                                font(font_id.clone()).strong().color(self.theme.muted));
 
                             for i in 1..=num_lines {
                                 let is_bp = current_tab.breakpoints.contains(&i);
+                                let is_pc = highlight_line == Some(i);
                                 let bg = if is_bp {
-                                    egui::Color32::RED
+                                    self.theme.breakpoint
+                                } else if is_pc {
+                                    self.theme.pc_row
                                 } else {
                                     egui::Color32::TRANSPARENT
                                 };
                                 let text_color = if is_bp {
                                     egui::Color32::WHITE
+                                } else if is_pc {
+                                    self.theme.pc_marker
                                 } else {
-                                    egui::Color32::GRAY
+                                    self.theme.gutter
                                 };
 
+                                let marker = if is_pc { "▶" } else { " " };
                                 let label = egui::Label::new(
-                                    egui::RichText::new(format!("{: >4}", i))
-                                        .font(font_id.clone())
-                                        .color(text_color)
-                                        .background_color(bg),
+                                    egui::RichText::new(format!(
+                                        "{}{: >4}",
+                                        marker, i
+                                    ))
+                                    .font(font_id.clone())
+                                    .color(text_color)
+                                    .background_color(bg),
                                 )
                                 .sense(egui::Sense::click());
 
                                 if ui
                                     .add(label)
                                     .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                    .on_hover_text(if is_bp {
+                                        "Breakpoint set — click to remove"
+                                    } else {
+                                        "Click to set a breakpoint"
+                                    })
                                     .clicked()
                                 {
                                     // Toggle breakpoint
@@ -2161,12 +2904,12 @@ impl eframe::App for Z80App {
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 0.0;
                                 ui.label(egui::RichText::new("Address").
-                                font(font_id.clone()).strong().color(egui::Color32::GRAY));
+                                font(font_id.clone()).strong().color(self.theme.muted));
 
                                 let addr_color = if self.is_assembly_stale {
-                                    egui::Color32::from_rgb(180, 150, 80)
+                                    self.theme.stale
                                 } else {
-                                    egui::Color32::from_rgb(100, 180, 240)
+                                    self.theme.address
                                 };
 
                                 for i in 1..=num_lines {
@@ -2186,7 +2929,9 @@ impl eframe::App for Z80App {
                                     let resp = ui.add(label);
 
                                     if self.is_assembly_stale {
-                                        resp.on_hover_text("Location counter is out of date. Click 'Load & Reset' to reassemble.");
+                                        resp.on_hover_text(
+                                            "Location counter is out of date. Assemble again to refresh.",
+                                        );
                                     }
                                 }
                             });
@@ -2196,12 +2941,12 @@ impl eframe::App for Z80App {
                             // Data Column
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 0.0;
-                                ui.label(egui::RichText::new("Data").font(font_id.clone()).strong().color(egui::Color32::GRAY));
+                                ui.label(egui::RichText::new("Data").font(font_id.clone()).strong().color(self.theme.muted));
 
                                 let data_color = if self.is_assembly_stale {
-                                    egui::Color32::from_rgb(180, 150, 80)
+                                    self.theme.stale
                                 } else {
-                                    egui::Color32::from_rgb(150, 220, 150)
+                                    self.theme.data
                                 };
 
                                 for i in 1..=num_lines {
@@ -2292,28 +3037,7 @@ impl eframe::App for Z80App {
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 0.0;
                             // Add a matching header so the text edit component starts exactly on the same row!
-                            ui.label(egui::RichText::new("Code").font(font_id.clone()).strong().color(egui::Color32::GRAY));
-
-                            let highlight_line = if !self.exec.is_running || self.exec.snapshot.halted {
-                                let pc = self.exec.snapshot.pc;
-                                if self.exec.snapshot.halted {
-                                    let mut best_match = None;
-                                    let mut max_addr = -1i32;
-
-                                    for (&addr, &line) in &self.address_to_line {
-                                        if addr < pc
-                                            && (addr as i32) > max_addr {
-                                                max_addr = addr as i32;
-                                                best_match = Some(line);
-                                            }
-                                    }
-                                    best_match.or_else(|| self.address_to_line.get(&pc).copied())
-                                } else {
-                                    self.address_to_line.get(&pc).copied()
-                                }
-                            } else {
-                                None
-                            };
+                            ui.label(egui::RichText::new("Code").font(font_id.clone()).strong().color(self.theme.muted));
 
                             let theme = &self.code_theme;
                             let mut layouter =
@@ -2328,29 +3052,59 @@ impl eframe::App for Z80App {
                                 };
 
                             let is_binary_tab = current_tab.kind == EditorTabKind::Binary;
-                            let editor = if is_binary_tab {
-                                egui::TextEdit::multiline(&mut current_tab.code)
-                                    .font(egui::TextStyle::Monospace)
-                                    .layouter(&mut layouter)
-                                    .code_editor()
-                                    .desired_width(f32::INFINITY)
-                                    .desired_rows(25)
-                                    .lock_focus(true)
-                                    .interactive(false)
-                            } else {
-                                egui::TextEdit::multiline(&mut current_tab.code)
-                                    .font(egui::TextStyle::Monospace)
-                                    .layouter(&mut layouter)
-                                    .code_editor()
-                                    .desired_width(f32::INFINITY)
-                                    .desired_rows(25)
-                                    .lock_focus(true)
-                            };
 
-                            if ui.add(editor).changed() && !is_binary_tab {
-                                current_tab.is_dirty = true;
-                                self.is_assembly_stale = true;
-                            }
+                            // Long lines are reachable via a horizontal scrollbar
+                            // instead of wrapping: wrapping would add visual rows
+                            // and desynchronise the line-number/address gutters.
+                            let font_id = egui::FontId::monospace(14.0);
+                            let longest = current_tab
+                                .code
+                                .split('\n')
+                                .map(|line| line.chars().count())
+                                .max()
+                                .unwrap_or(0);
+                            let text_width = ui
+                                .painter()
+                                .layout_no_wrap(
+                                    "M".repeat(longest.max(1)),
+                                    font_id,
+                                    egui::Color32::PLACEHOLDER,
+                                )
+                                .size()
+                                .x;
+                            let desired_width =
+                                (text_width + 24.0).max(ui.available_width());
+
+                            egui::ScrollArea::horizontal()
+                                .id_salt("code_hscroll")
+                                .auto_shrink([false, true])
+                                .show(ui, |ui| {
+                                    let editor = if is_binary_tab {
+                                        egui::TextEdit::multiline(&mut current_tab.code)
+                                            .font(egui::TextStyle::Monospace)
+                                            .layouter(&mut layouter)
+                                            .code_editor()
+                                            .margin(egui::Margin::symmetric(4, 0))
+                                            .desired_width(desired_width)
+                                            .desired_rows(25)
+                                            .lock_focus(true)
+                                            .interactive(false)
+                                    } else {
+                                        egui::TextEdit::multiline(&mut current_tab.code)
+                                            .font(egui::TextStyle::Monospace)
+                                            .layouter(&mut layouter)
+                                            .code_editor()
+                                            .margin(egui::Margin::symmetric(4, 0))
+                                            .desired_width(desired_width)
+                                            .desired_rows(25)
+                                            .lock_focus(true)
+                                    };
+
+                                    if ui.add(editor).changed() && !is_binary_tab {
+                                        current_tab.is_dirty = true;
+                                        self.is_assembly_stale = true;
+                                    }
+                                });
                         });
                     });
                 });
@@ -2365,177 +3119,181 @@ impl eframe::App for Z80App {
 
         // Handle Modal Dialogs
         if let Some(mut modal_type) = self.pending_modal.take() {
-            let mut open = true;
             let mut should_close_modal = false;
 
-            let title = match modal_type {
-                ModalType::AddDevice(_, _) => "Add Device",
-                _ => "Unsaved Changes",
+            let title = match &modal_type {
+                ModalType::AddDevice(_, _) => "Attach Device",
+                ModalType::CloseTab(_) => "Close Unsaved Tab",
+                ModalType::Quit => "Quit JAZZ80",
             };
 
-            // We use a centered window to simulate a modal
-            egui::Window::new(title)
+            let modal = egui::Modal::new(egui::Id::unique("modal")).show(ui.ctx(), |ui| {
+                ui.set_width(380.0);
+                ui.heading(title);
+                ui.separator();
+
+                match &mut modal_type {
+                    ModalType::AddDevice(definition, port_text) => {
+                        ui.label("I/O port (hexadecimal):");
+                        ui.add(
+                            egui::TextEdit::singleline(port_text)
+                                .hint_text("e.g. 20")
+                                .desired_width(110.0),
+                        );
+                        let parsed = parse_hex_u16(port_text);
+                        if parsed.is_none() {
+                            ui.label(
+                                egui::RichText::new("Enter a hexadecimal port, e.g. 20")
+                                    .small()
+                                    .color(self.theme.danger),
+                            );
+                        } else {
+                            ui.label(
+                                egui::RichText::new("Devices listen on the low byte of the port.")
+                                    .small()
+                                    .color(self.theme.muted),
+                            );
+                        }
+                        if let Some(port) = parsed
+                            && port > 0xFF
+                        {
+                            ui.label(
+                                egui::RichText::new("Port must be 0–255")
+                                    .small()
+                                    .color(self.theme.danger),
+                            );
+                        }
+
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            let valid_port = parse_hex_u16(port_text).filter(|port| *port <= 0xFF);
+                            if ui
+                                .add_enabled(valid_port.is_some(), egui::Button::new("Add"))
+                                .clicked()
+                            {
+                                let port = valid_port.unwrap();
+                                let dev = (definition.create)(port);
+                                if let Some(machine) = self.exec.machine.as_mut() {
+                                    machine.cpu.attach_device(dev.clone());
+                                }
+                                self.attached_devices.push(dev);
+                                self.attached_device_specs.push(DeviceSpec {
+                                    menu_name: definition.menu_name.to_string(),
+                                    port,
+                                });
+                                should_close_modal = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                should_close_modal = true;
+                            }
+                        });
+                    }
+                    ModalType::CloseTab(idx) => {
+                        let idx = *idx;
+                        let name = self
+                            .tabs
+                            .get(idx)
+                            .and_then(|t| t.path.as_ref())
+                            .and_then(|p| p.file_name())
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("Untitled");
+
+                        ui.label(format!(
+                            "Save the changes you made to \"{name}\" before closing?"
+                        ));
+                        ui.label(
+                            egui::RichText::new(
+                                "Your changes will be lost if you don't save them.",
+                            )
+                            .color(self.theme.muted),
+                        );
+
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Save").clicked() {
+                                self.save_file(idx, frame.storage_mut());
+                                if self.tabs.get(idx).is_some_and(|t| !t.is_dirty) {
+                                    self.close_tab(idx, frame.storage_mut());
+                                    should_close_modal = true;
+                                }
+                            }
+                            if ui.button("Don't Save").clicked() {
+                                if let Some(tab) = self.tabs.get_mut(idx) {
+                                    tab.is_dirty = false;
+                                }
+                                self.close_tab(idx, frame.storage_mut());
+                                should_close_modal = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                should_close_modal = true;
+                            }
+                        });
+                    }
+                    ModalType::Quit => {
+                        ui.label("You have unsaved changes in this workspace.");
+                        ui.label("Save everything before quitting?");
+
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Save All").clicked() && self.save_all(frame.storage_mut())
+                            {
+                                should_close_modal = true;
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                            if ui.button("Quit Without Saving").clicked() {
+                                for tab in &mut self.tabs {
+                                    tab.is_dirty = false;
+                                }
+                                should_close_modal = true;
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                            if ui.button("Cancel").clicked() {
+                                should_close_modal = true;
+                            }
+                        });
+                    }
+                }
+            });
+
+            if modal.should_close() {
+                should_close_modal = true;
+            }
+
+            if !should_close_modal {
+                self.pending_modal = Some(modal_type);
+            }
+        }
+
+        // Keyboard shortcut reference
+        if self.show_shortcuts {
+            egui::Window::new("Keyboard Shortcuts")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .open(&mut open)
-                .show(ui, |ui| {
-                    match &mut modal_type {
-                        ModalType::AddDevice(definition, port_text) => {
-                            ui.label("Enter Port Number (Hex):");
-                            ui.text_edit_singleline(port_text);
-
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .button("Add")
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    .clicked()
-                                {
-                                    // Parse port
-                                    let port_res = u16::from_str_radix(port_text, 16);
-                                    match port_res {
-                                        Ok(port) => {
-                                            let dev = (definition.create)(port);
-                                            if let Some(machine) = self.exec.machine.as_mut() {
-                                                machine.cpu.attach_device(dev.clone());
-                                            }
-                                            self.attached_devices.push(dev);
-                                            should_close_modal = true;
-                                        }
-                                        Err(_) => {
-                                            ui.label("Invalid Hex Number");
-                                        }
-                                    }
-                                }
-                                if ui
-                                    .button("Cancel")
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    .clicked()
-                                {
-                                    should_close_modal = true;
-                                }
-                            });
-                        }
-                        ModalType::CloseTab(idx) => {
-                            let idx = *idx; // Copy index
-                            let name = self
-                                .tabs
-                                .get(idx)
-                                .and_then(|t| t.path.as_ref())
-                                .and_then(|p| p.file_name())
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("Untitled");
-
-                            ui.label(format!(
-                                "Do you want to save the changes you made to {}?",
-                                name
-                            ));
-                            ui.label("Your changes will be lost if you don't save them.");
-
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .button("Save")
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    .clicked()
-                                {
-                                    self.save_file(idx, frame.storage_mut());
-
-                                    // Check if save succeeded (is_dirty false)
-                                    if !self.tabs[idx].is_dirty {
-                                        self.close_tab(idx, frame.storage_mut());
-                                        should_close_modal = true;
-                                    }
-                                }
-                                if ui
-                                    .button("Don't Save")
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    .clicked()
-                                {
-                                    if idx < self.tabs.len() {
-                                        self.tabs[idx].is_dirty = false; // Forced clear
-                                        self.close_tab(idx, frame.storage_mut());
-                                    }
-                                    should_close_modal = true;
-                                }
-                                if ui
-                                    .button("Cancel")
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    .clicked()
-                                {
-                                    should_close_modal = true;
-                                }
-                            });
-                        }
-                        ModalType::Quit => {
-                            ui.label("You have unsaved changes in your workspace.");
-                            ui.label("Do you want to save all changes before quitting?");
-
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .button("Save All")
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    .clicked()
-                                {
-                                    // Iterate and save all dirty tabs
-                                    let prev_active = self.active_tab;
-                                    for i in 0..self.tabs.len() {
-                                        if self.tabs[i].is_dirty {
-                                            self.save_file(i, frame.storage_mut());
-                                        }
-                                    }
-
-                                    for i in 0..self.tabs.len() {
-                                        if self.tabs[i].is_dirty {
-                                            // Ensure tab is active if it might need a dialog (untitled)
-                                            // The implementation of save_file checks `tab_idx == self.active_tab` for untitled files.
-                                            // So we must switch.
-                                            if self.tabs[i].path.is_none() {
-                                                self.active_tab = i;
-                                            }
-                                            self.save_file(i, frame.storage_mut());
-                                        }
-                                    }
-                                    self.active_tab = prev_active;
-
-                                    // If all clear, close
-                                    if !self.tabs.iter().any(|t| t.is_dirty) {
-                                        // Force close by clearing modal first to prevent loop
-                                        should_close_modal = true;
-                                        // self.pending_modal is already None because we took it
-                                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                                    }
-                                }
-                                if ui
-                                    .button("Quit Without Saving")
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    .clicked()
-                                {
-                                    // Clear all dirty flags to bypass on_close_event check
-                                    for tab in &mut self.tabs {
-                                        tab.is_dirty = false;
-                                    }
-                                    should_close_modal = true;
-                                    // self.pending_modal is already None
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                                }
-                                if ui
-                                    .button("Cancel")
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    .clicked()
-                                {
-                                    should_close_modal = true;
-                                }
-                            });
-                        }
-                    }
+                .open(&mut self.show_shortcuts)
+                .show(ui.ctx(), |ui| {
+                    let rows = [
+                        ("Run / Stop", "F5"),
+                        ("Step one instruction", "F8"),
+                        ("New file", "Ctrl+N"),
+                        ("Open file", "Ctrl+O"),
+                        ("Save", "Ctrl+S"),
+                        ("Save as", "Ctrl+Shift+S"),
+                        ("Close tab", "Ctrl+W"),
+                        ("Toggle breakpoint", "Click the gutter"),
+                    ];
+                    egui::Grid::new("shortcuts_grid")
+                        .num_columns(2)
+                        .spacing([24.0, 6.0])
+                        .striped(true)
+                        .show(ui, |ui| {
+                            for (action, keys) in rows {
+                                ui.label(action);
+                                ui.monospace(keys);
+                                ui.end_row();
+                            }
+                        });
                 });
-
-            if !open || should_close_modal {
-                self.pending_modal = None;
-            } else {
-                // Restore logic
-                self.pending_modal = Some(modal_type);
-            }
         }
 
         // Poll execution events from the runner
@@ -2549,5 +3307,71 @@ impl eframe::App for Z80App {
 
         self.exec
             .sync_breakpoints(&self.line_to_address, self.active_tab, &self.tabs);
+    }
+}
+
+#[cfg(test)]
+mod register_input_tests {
+    use super::{parse_hex_u8, parse_hex_u16};
+
+    #[test]
+    fn accepts_plain_and_prefixed_hex() {
+        assert_eq!(parse_hex_u16("1A2B"), Some(0x1A2B));
+        assert_eq!(parse_hex_u16("0x1a2b"), Some(0x1A2B));
+        assert_eq!(parse_hex_u16("$1A2B"), Some(0x1A2B));
+        assert_eq!(parse_hex_u16("#1a2b"), Some(0x1A2B));
+        assert_eq!(parse_hex_u8("0x00"), Some(0));
+        assert_eq!(parse_hex_u8("FF"), Some(0xFF));
+    }
+
+    #[test]
+    fn ignores_surrounding_space_and_separators() {
+        assert_eq!(parse_hex_u16(" 0x1A_2B "), Some(0x1A2B));
+    }
+
+    #[test]
+    fn rejects_empty_and_out_of_range() {
+        assert_eq!(parse_hex_u16(""), None);
+        assert_eq!(parse_hex_u16("0x"), None);
+        assert_eq!(parse_hex_u16("10000"), None);
+        assert_eq!(parse_hex_u8("100"), None);
+        assert_eq!(parse_hex_u8("zz"), None);
+    }
+}
+
+#[cfg(test)]
+mod constant_format_tests {
+    use super::{SymbolDisplayFormat, format_constant_value};
+
+    #[test]
+    fn default_shows_a_hex_word() {
+        assert_eq!(
+            format_constant_value(0x1234, SymbolDisplayFormat::Default),
+            "0x1234"
+        );
+    }
+
+    #[test]
+    fn hex_formats_use_little_endian_bytes() {
+        assert_eq!(
+            format_constant_value(0x1234, SymbolDisplayFormat::HexBytes),
+            "[34 12]"
+        );
+        assert_eq!(
+            format_constant_value(0x1234, SymbolDisplayFormat::HexWords),
+            "[1234]"
+        );
+    }
+
+    #[test]
+    fn string_format_stops_at_a_null_byte() {
+        assert_eq!(
+            format_constant_value(0x4241, SymbolDisplayFormat::String),
+            "\"AB\""
+        );
+        assert_eq!(
+            format_constant_value(0x0041, SymbolDisplayFormat::String),
+            "\"A\""
+        );
     }
 }

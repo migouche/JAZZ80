@@ -45,10 +45,17 @@ pub fn highlight(
     let mut job = egui::text::LayoutJob::default();
     let font_id = egui::FontId::monospace(14.0); // Standard mono size
 
-    for (line_idx, line) in code.lines().enumerate() {
+    // Split on '\n' (not `str::lines`) so the produced galley reproduces the
+    // buffer byte-for-byte. `lines()` drops a trailing newline and the previous
+    // implementation appended one unconditionally, which made the galley one
+    // row longer than the buffer and put the caret on the wrong line at EOF.
+    let lines: Vec<&str> = code.split('\n').collect();
+
+    for (line_idx, line) in lines.iter().enumerate() {
+        let line = *line;
         let current_line_num = line_idx + 1;
         let background = if highlight_line == Some(current_line_num) {
-            egui::Color32::from_rgba_premultiplied(40, 40, 40, 255) // Dark Gray Highlight
+            egui::Color32::from_rgb(0x3a, 0x40, 0x4b) // One Dark current-row tint
         } else {
             egui::Color32::TRANSPARENT
         };
@@ -183,15 +190,17 @@ pub fn highlight(
             );
         }
 
-        job.append(
-            "\n",
-            0.0,
-            egui::TextFormat {
-                font_id: font_id.clone(),
-                background,
-                ..Default::default()
-            },
-        );
+        if line_idx + 1 < lines.len() {
+            job.append(
+                "\n",
+                0.0,
+                egui::TextFormat {
+                    font_id: font_id.clone(),
+                    background,
+                    ..Default::default()
+                },
+            );
+        }
     }
 
     job
