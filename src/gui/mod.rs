@@ -1549,7 +1549,7 @@ START:
                     ($name:expr, $getter:expr, $setter:expr) => {
                         ui.label($name);
                         let val = $getter;
-                        let id = egui::Id::new($name);
+                        let id = egui::Id::unique($name);
                         let mut s = ui.data_mut(|d| {
                             d.get_temp_mut_or_insert_with(id, || format!("{:04X}", val))
                                 .clone()
@@ -1585,7 +1585,7 @@ START:
                     ($name:expr, $id:expr, $getter:expr, $setter:expr) => {
                         ui.label($name);
                         let val = $getter;
-                        let id = egui::Id::new($id);
+                        let id = egui::Id::unique($id);
                         let mut s = ui.data_mut(|d| {
                             d.get_temp_mut_or_insert_with(id, || format!("{:02X}", val))
                                 .clone()
@@ -1710,7 +1710,7 @@ START:
 
                 let interact_resp = ui.interact(
                     frame_resp.response.rect,
-                    ui.id().with(label),
+                    ui.scope_id().with(label),
                     egui::Sense::click(),
                 );
 
@@ -3127,7 +3127,7 @@ impl eframe::App for Z80App {
                 ModalType::Quit => "Quit JAZZ80",
             };
 
-            let modal = egui::Modal::new(egui::Id::new("modal")).show(ui.ctx(), |ui| {
+            let modal = egui::Modal::new(egui::Id::unique("modal")).show(ui.ctx(), |ui| {
                 ui.set_width(380.0);
                 ui.heading(title);
                 ui.separator();
