@@ -1020,10 +1020,10 @@ impl DeviceWithUi for VirtualDOS {
                     ui.label("Choose a bundled example or upload from your computer:");
                     ui.separator();
 
-                    for (name, contents) in crate::examples::get_example_files() {
-                        if ui.button(&name).clicked() {
-                            let path = self.child_path(&name);
-                            self.fs.insert(path, Inode::File(contents.clone()));
+                    for (name, contents) in crate::gui::BUNDLED_EXAMPLES {
+                        if ui.button(*name).clicked() {
+                            let path = self.child_path(name);
+                            self.fs.insert(path, Inode::File(contents.to_vec()));
                             self.show_upload_menu = false;
                         }
                     }

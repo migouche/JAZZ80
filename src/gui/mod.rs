@@ -17,6 +17,11 @@ mod formatting;
 mod highlighting;
 mod theme;
 
+// Example programs bundled into the web build. `build.rs` generates this
+// list from `z80 files/examples.json`, so a missing example fails the build.
+#[cfg(target_arch = "wasm32")]
+include!(concat!(env!("OUT_DIR"), "/bundled_examples.inc"));
+
 #[cfg(target_arch = "wasm32")]
 use std::sync::mpsc::{Receiver, channel};
 

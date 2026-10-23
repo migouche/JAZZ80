@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "JAZZ80"
-version = "0.5.4"
+version = "0.6.1"
 dependencies = [
  "console_error_panic_hook",
  "eframe",
@@ -17,6 +17,7 @@ dependencies = [
  "rfd",
  "rstest",
  "serde",
+ "serde_json",
  "tracing-subscriber",
  "tracing-wasm",
  "wasm-bindgen",
