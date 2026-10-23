@@ -38,7 +38,34 @@ impl Machine {
         }
     }
 
-    pub fn snapshot(&self) -> MachineSnapshot {
+    pub fn snapshot(&mut self) -> MachineSnapshot {
+        let _ = self.cpu.memory.take_dirty();
+        let memory = (0..=u16::MAX)
+            .map(|addr| self.cpu.memory.read(addr))
+            .collect();
+        self.state_snapshot(memory)
+    }
+
+    pub fn snapshot_delta(&mut self) -> SnapshotDelta {
+        let memory = self.cpu.memory.take_dirty().unwrap_or_else(|| {
+            (0..=u16::MAX)
+                .map(|addr| (addr, self.cpu.memory.read(addr)))
+                .collect()
+        });
+        SnapshotDelta {
+            state: self.state_snapshot(Vec::new()),
+            memory,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn mark_dirty(&mut self, addresses: impl IntoIterator<Item = u16>) {
+        for address in addresses {
+            self.cpu.memory.mark_dirty(address);
+        }
+    }
+
+    fn state_snapshot(&self, memory: Vec<u8>) -> MachineSnapshot {
         let mut regs = [0u8; 8];
         for (i, gpr) in GPR_ORDER.iter().enumerate() {
             regs[i] = self.cpu.get_register(*gpr);
@@ -47,23 +74,6 @@ impl Machine {
         for (i, gpr) in GPR_ORDER.iter().enumerate() {
             shadow_regs[i] = self.cpu.get_shadow_register(*gpr);
         }
-
-        // Only copy dirty memory addresses to avoid 64KB copy per snapshot
-        let mut memory = vec![0u8; 0x10000];
-        let dirty = self.cpu.memory.get_dirty();
-        if let Some(dirty) = &dirty {
-            for (addr, byte) in memory.iter_mut().enumerate() {
-                if dirty[addr] {
-                    *byte = self.cpu.memory.read(addr as u16);
-                }
-            }
-        } else {
-            for (addr, byte) in memory.iter_mut().enumerate() {
-                *byte = self.cpu.memory.read(addr as u16);
-            }
-        }
-        // Clear dirty flags after snapshot
-        self.cpu.memory.clear_dirty();
 
         MachineSnapshot {
             pc: self.cpu.get_pc(),
@@ -162,6 +172,12 @@ impl Default for MachineSnapshot {
             memory: vec![0u8; 0x10000],
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct SnapshotDelta {
+    pub state: MachineSnapshot,
+    pub memory: Vec<(u16, u8)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]

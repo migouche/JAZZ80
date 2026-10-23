@@ -47,7 +47,7 @@ pub fn delivers_snapshots_while_running<R: Runner>(mut runner: R) {
     let mut saw_snapshot = false;
     while std::time::Instant::now() < deadline {
         for event in runner.poll() {
-            if matches!(&event, Event::Snapshot(s) if s.pc > 0) {
+            if matches!(&event, Event::Snapshot(s) if s.state.pc > 0) {
                 saw_snapshot = true;
             }
         }

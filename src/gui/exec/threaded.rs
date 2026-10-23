@@ -117,19 +117,19 @@ fn worker_loop(
         match machine.run_slice(SLICE_TICKS, &breakpoints) {
             SliceResult::BudgetExhausted { .. } => {
                 if last_snap.elapsed() >= SNAPSHOT_INTERVAL {
-                    let _ = event_tx.try_send(Event::Snapshot(machine.snapshot()));
+                    send_snapshot(&event_tx, &mut machine);
                     last_snap = Instant::now();
                 }
                 std::thread::sleep(BREATHER);
             }
             SliceResult::Halted { .. } => {
-                let _ = event_tx.try_send(Event::Snapshot(machine.snapshot()));
+                send_snapshot(&event_tx, &mut machine);
                 last_snap = Instant::now();
                 std::thread::sleep(SNAPSHOT_INTERVAL);
             }
             SliceResult::HitBreakpoint { .. } => {
                 let addr = machine.cpu.get_pc();
-                let _ = event_tx.try_send(Event::Snapshot(machine.snapshot()));
+                send_snapshot(&event_tx, &mut machine);
                 break 'outer Some(addr);
             }
         }
@@ -137,6 +137,18 @@ fn worker_loop(
     if let Some(addr) = stop_addr {
         let _ = event_tx.try_send(Event::Finished(addr));
     }
-    let _ = event_tx.try_send(Event::Snapshot(machine.snapshot()));
+    send_snapshot(&event_tx, &mut machine);
     let _ = machine_tx.send(machine);
+}
+
+fn send_snapshot(event_tx: &SyncSender<Event>, machine: &mut Machine) {
+    let delta = machine.snapshot_delta();
+    match event_tx.try_send(Event::Snapshot(delta)) {
+        Ok(()) => {}
+        Err(mpsc::TrySendError::Full(Event::Snapshot(delta))) => {
+            machine.mark_dirty(delta.memory.into_iter().map(|(addr, _)| addr));
+        }
+        Err(mpsc::TrySendError::Disconnected(_)) => {}
+        Err(mpsc::TrySendError::Full(_)) => unreachable!(),
+    }
 }

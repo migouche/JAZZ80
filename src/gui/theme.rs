@@ -1,10 +1,3 @@
-//! Central application theme.
-//!
-//! Every colour used by the shell (panels, gutters, status bar, flags,
-//! breakpoints, dialogs) comes from here instead of being written inline in the
-//! widget code. The palette is derived from One Dark, the same palette used by
-//! the syntax highlighter, so the editor and the surrounding chrome agree.
-
 use eframe::egui;
 
 #[derive(Clone, Copy, Debug)]
@@ -66,7 +59,6 @@ impl AppTheme {
     };
 }
 
-/// Install the application visuals and widget spacing on a context.
 pub fn apply(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::dark();
     visuals.panel_fill = AppTheme::ONE_DARK.bg;
@@ -81,8 +73,6 @@ pub fn apply(ctx: &egui::Context) {
     visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(4);
     visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(4);
     visuals.widgets.active.corner_radius = egui::CornerRadius::same(4);
-    // The palette above is a dark palette. Pin the theme so a light-mode OS
-    // setting cannot mix dark text with our dark surfaces.
     ctx.set_theme(egui::Theme::Dark);
     ctx.set_visuals_of(egui::Theme::Dark, visuals);
 
@@ -90,4 +80,20 @@ pub fn apply(ctx: &egui::Context) {
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
     style.spacing.button_padding = egui::vec2(8.0, 4.0);
     ctx.set_style_of(egui::Theme::Dark, style);
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn default_fonts_include_the_bundled_icon_fonts() {
+        let fonts = eframe::egui::FontDefinitions::default();
+        assert!(
+            fonts.font_data.contains_key("NotoEmoji-Regular"),
+            "NotoEmoji-Regular is required for the toolbar icons"
+        );
+        assert!(
+            fonts.font_data.contains_key("emoji-icon-font"),
+            "emoji-icon-font is required for the toolbar icons"
+        );
+    }
 }

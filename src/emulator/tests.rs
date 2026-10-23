@@ -30,6 +30,44 @@ fn snapshot_matches_cpu_state() {
     assert_eq!(snap.memory.len(), 0x10000);
 }
 
+#[test]
+fn consecutive_snapshots_keep_memory_contents() {
+    let mut machine = Machine::new();
+    machine.memory_mut().write(0x1234, 0xAB);
+    machine.memory_mut().write(0x1235, 0xCD);
+
+    let first = machine.snapshot();
+    let second = machine.snapshot();
+
+    assert_eq!(first.memory, second.memory);
+    assert_eq!(second.memory[0x1234], 0xAB);
+    assert_eq!(second.memory[0x1235], 0xCD);
+}
+
+#[test]
+fn snapshot_delta_only_reports_changed_bytes() {
+    let mut machine = Machine::new();
+    machine.memory_mut().write(0x1234, 0xAB);
+    machine.memory_mut().write(0x1235, 0xCD);
+
+    let delta = machine.snapshot_delta();
+
+    assert_eq!(delta.memory, vec![(0x1234, 0xAB), (0x1235, 0xCD)]);
+    assert!(machine.snapshot_delta().memory.is_empty());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn requeued_dirty_bytes_are_reported_again() {
+    let mut machine = Machine::new();
+    machine.memory_mut().write(0x1234, 0xAB);
+    let delta = machine.snapshot_delta();
+
+    machine.mark_dirty(delta.memory.into_iter().map(|(addr, _)| addr));
+
+    assert_eq!(machine.snapshot_delta().memory, vec![(0x1234, 0xAB)]);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn run_slice_zero_budget_executes_nothing() {

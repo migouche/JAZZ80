@@ -1,6 +1,6 @@
 use crate::assembler::{AssemblyLine, Symbol, SymbolType, assemble_binary, assemble_with_metadata};
 use crate::cpu::{Flag, GPR};
-use crate::emulator::{Machine, MachineSnapshot};
+use crate::emulator::{Machine, MachineSnapshot, SnapshotDelta};
 use crate::gui::exec::{Command, Event, Runner, RunnerImpl};
 use crate::traits::SynchronousComponent;
 use eframe::egui::{self, TextBuffer};
@@ -108,7 +108,6 @@ pub struct EditorTab {
     pub binary_bytes: Option<Vec<u8>>,
 }
 
-/// A persisted description of an attached device.
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 pub struct DeviceSpec {
     pub menu_name: String,
@@ -126,8 +125,6 @@ pub struct Z80App {
 
     #[serde(skip)]
     last_error: Option<String>,
-    /// Non-error feedback (saves, cancellations, capability notes). Kept
-    /// separate from `last_error` so it never blocks execution.
     #[serde(skip)]
     status_message: Option<String>,
     #[serde(skip)]
@@ -149,8 +146,7 @@ pub struct Z80App {
 
     #[serde(skip)]
     attached_devices: Vec<Arc<Mutex<dyn DeviceWithUi>>>,
-    /// Serialisable description of the attached devices, so they survive a
-    /// restart. The devices themselves hold UI/hardware state that is rebuilt.
+
     #[serde(default)]
     attached_device_specs: Vec<DeviceSpec>,
 
@@ -165,7 +161,6 @@ pub struct Z80App {
     #[serde(skip)]
     binary_file_receiver: Option<Receiver<(String, Vec<u8>)>>,
 
-    /// Example names advertised by the bundled `examples.json` (web only).
     #[cfg(target_arch = "wasm32")]
     #[serde(skip)]
     examples_list: Vec<String>,
@@ -189,13 +184,10 @@ pub struct Z80App {
     #[serde(skip)]
     memory_follow_pc: bool,
 
-    // Location Counter toggle and state tracking
     #[serde(default)]
     show_location_counter: bool,
     #[serde(skip)]
     is_assembly_stale: bool,
-    /// Whether a program has been successfully assembled/loaded into the
-    /// current machine. Run/Step are disabled until this is true.
     #[serde(skip)]
     program_loaded: bool,
 }
@@ -236,9 +228,18 @@ impl ExecutionState {
     }
 
     pub fn refresh_snapshot(&mut self) {
-        if let Some(machine) = self.machine.as_ref() {
+        if let Some(machine) = self.machine.as_mut() {
             self.snapshot = machine.snapshot();
         }
+    }
+
+    pub fn apply_delta(&mut self, delta: SnapshotDelta) {
+        for (addr, value) in delta.memory {
+            self.snapshot.memory[addr as usize] = value;
+        }
+        let memory = std::mem::take(&mut self.snapshot.memory);
+        self.snapshot = delta.state;
+        self.snapshot.memory = memory;
     }
 
     pub fn sync_breakpoints(
@@ -290,9 +291,6 @@ fn gpr_index(gpr: GPR) -> usize {
     }
 }
 
-/// Parse a hexadecimal number. Accepts an optional `0x`, `$` or `#` prefix,
-/// surrounding whitespace and `_` digit separators — all of which users type
-/// naturally when editing a register.
 fn parse_hex_u16(text: &str) -> Option<u16> {
     let cleaned = text.trim().replace('_', "");
     let digits = cleaned
@@ -334,8 +332,6 @@ fn snapshot_flag(snapshot: &MachineSnapshot, flag: Flag) -> bool {
     }
 }
 
-/// Build a URL for a file inside the bundled `z80 files` directory on the web.
-/// Resolves relative to the deployed page so sub-path deployments keep working.
 #[cfg(target_arch = "wasm32")]
 fn z80_files_url(file: &str) -> Option<String> {
     let window = web_sys::window()?;
@@ -367,9 +363,6 @@ fn flag_description(flag: Flag) -> &'static str {
     }
 }
 
-/// Render an EQU constant using the same display formats as memory variables.
-/// Constants have no address, so their numeric value is treated as a 16-bit
-/// little-endian value (matching how Word symbols are laid out in memory).
 fn format_constant_value(value: u16, format: SymbolDisplayFormat) -> String {
     let low = (value & 0xFF) as u8;
     let high = (value >> 8) as u8;
@@ -535,7 +528,6 @@ START:
             .map(|p| p.display().to_string())
     }
 
-    /// Recreate a device from its persisted description.
     fn attach_device_spec(&mut self, spec: &DeviceSpec) {
         let Some(definition) = crate::components::devices::device_definitions()
             .iter()
@@ -551,11 +543,7 @@ START:
     }
 
     fn load_and_reset(&mut self) {
-        // A "reset" must actually reset the CPU. Previously the machine was
-        // reused, so registers (and PC) survived Assemble & Reset. Recreate it
-        // and re-attach the devices instead.
         if self.exec.machine.is_none() {
-            // The runner owned it; reclaim and drop it.
             let _ = self.exec.runner.take_machine();
         }
         self.exec.machine = Some(Machine::new());
@@ -680,7 +668,7 @@ START:
     }
 
     fn refresh_snapshot(&mut self) {
-        if let Some(machine) = self.exec.machine.as_ref() {
+        if let Some(machine) = self.exec.machine.as_mut() {
             self.exec.snapshot = machine.snapshot();
         }
     }
@@ -742,8 +730,6 @@ START:
         }
     }
 
-    /// The primary toolbar action: Stop while running, otherwise un-halt (if
-    /// needed) and start running.
     fn toggle_execution(&mut self) {
         if self.exec.is_running {
             self.stop_execution();
@@ -984,8 +970,6 @@ START:
             return;
         }
 
-        // Opening a file always loads Z80 assembly source. Use "Load Binary..."
-        // to import a raw binary image.
         #[cfg(not(target_arch = "wasm32"))]
         {
             match std::fs::read_to_string(&path) {
@@ -998,17 +982,12 @@ START:
             }
         }
 
-        // On the web there is no filesystem path to re-open, so a "recent file"
-        // is an example that can be fetched from the server by name.
         #[cfg(target_arch = "wasm32")]
         {
             self.load_example(path.to_string_lossy().into_owned(), _ctx, storage);
         }
     }
 
-    /// Fetch the list of example names from the bundled `examples.json`.
-    /// Examples are a web-only feature: the browser build cannot browse a
-    /// filesystem, so Trunk copies the `z80 files` folder next to the app.
     #[cfg(target_arch = "wasm32")]
     fn start_examples_fetch(&mut self, ctx: &egui::Context) {
         let Some(url) = z80_files_url("examples.json") else {
@@ -1048,8 +1027,6 @@ START:
         });
     }
 
-    /// Fetch one bundled example by name and hand it to the editor. Text files
-    /// are opened as source; `.bin` files open in the read-only binary tab.
     #[cfg(target_arch = "wasm32")]
     fn load_example(
         &mut self,
@@ -1083,18 +1060,13 @@ START:
         });
     }
 
-    /// Save every dirty tab. Returns true when nothing is dirty afterwards
-    /// (i.e. every save completed and wasn't cancelled).
     fn save_all(&mut self, mut storage: Option<&mut (dyn eframe::Storage + 'static)>) -> bool {
         let prev_active = self.active_tab;
         for i in 0..self.tabs.len() {
             if self.tabs[i].is_dirty {
-                // `save_file` treats the active tab specially (untitled files
-                // need the Save As dialog), so activate each tab in turn.
                 self.active_tab = i;
                 self.save_file(i, storage.as_deref_mut());
                 if self.tabs[i].is_dirty {
-                    // Cancelled or failed: stop asking about further tabs.
                     break;
                 }
             }
@@ -1373,8 +1345,8 @@ START:
         if self.exec.is_running {
             for event in self.exec.runner.poll() {
                 match event {
-                    Event::Snapshot(snapshot) => {
-                        self.exec.snapshot = snapshot;
+                    Event::Snapshot(delta) => {
+                        self.exec.apply_delta(delta);
                     }
                     Event::Finished(addr) => {
                         self.exec.is_running = false;
@@ -1815,7 +1787,6 @@ impl Default for Z80App {
 }
 
 impl eframe::App for Z80App {
-    /// Called by the frame work to save state before shutdown.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, "z80_workspace", self);
     }
@@ -3378,5 +3349,24 @@ mod constant_format_tests {
             format_constant_value(0x0041, SymbolDisplayFormat::String),
             "\"A\""
         );
+    }
+}
+
+#[cfg(test)]
+mod execution_state_tests {
+    use super::{ExecutionState, Machine};
+
+    #[test]
+    fn applying_a_delta_keeps_unchanged_memory() {
+        let mut state = ExecutionState::new();
+        state.snapshot.memory[0x1000] = 0x11;
+        state.snapshot.memory[0x1001] = 0x22;
+
+        let mut machine = Machine::new();
+        machine.memory_mut().write(0x1001, 0x33);
+        state.apply_delta(machine.snapshot_delta());
+
+        assert_eq!(state.snapshot.memory[0x1000], 0x11);
+        assert_eq!(state.snapshot.memory[0x1001], 0x33);
     }
 }

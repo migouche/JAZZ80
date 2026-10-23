@@ -610,8 +610,6 @@ impl Z80A {
         self.devices.push(device);
     }
 
-    /// Detach every I/O device. Used when the UI removes a device while the
-    /// machine is paused; the caller re-attaches the ones that remain.
     pub fn clear_devices(&mut self) {
         self.devices.clear();
     }

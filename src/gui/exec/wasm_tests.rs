@@ -46,7 +46,7 @@ fn cooperative_delivers_snapshots_while_running() {
     while Instant::now() < deadline {
         for event in runner.poll() {
             if let Event::Snapshot(s) = &event {
-                if s.pc > 0 {
+                if s.state.pc > 0 {
                     saw_snapshot = true;
                 }
             }

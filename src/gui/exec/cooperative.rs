@@ -55,17 +55,17 @@ impl Runner for Cooperative {
                 let addr = machine.cpu.get_pc();
                 self.finished = Some(addr);
                 events.push(Event::Finished(addr));
-                events.push(Event::Snapshot(machine.snapshot()));
+                events.push(Event::Snapshot(machine.snapshot_delta()));
                 return events;
             }
             if cycles >= SLICE_TICKS {
-                events.push(Event::Snapshot(machine.snapshot()));
+                events.push(Event::Snapshot(machine.snapshot_delta()));
                 break;
             }
             machine.cpu.tick();
             cycles += 1;
             if machine.cpu.is_halted() {
-                events.push(Event::Snapshot(machine.snapshot()));
+                events.push(Event::Snapshot(machine.snapshot_delta()));
                 break;
             }
         }

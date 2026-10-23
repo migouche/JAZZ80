@@ -8,6 +8,7 @@ version = "0.6.1"
 dependencies = [
  "console_error_panic_hook",
  "eframe",
+ "egui",
  "egui_kittest",
  "getrandom 0.4.3",
  "image",

@@ -1,16 +1,17 @@
 use crate::traits::MemoryMapper;
-use std::cell::Cell;
+
+const DIRTY_WORDS: usize = 0x10000 / 64;
 
 pub struct Mem64k {
     data: [u8; 0x10000],
-    dirty: Vec<Cell<bool>>,
+    dirty: [u64; DIRTY_WORDS],
 }
 
 impl Mem64k {
     pub fn new() -> Self {
         Self {
             data: [0; 0x10000],
-            dirty: (0..0x10000).map(|_| Cell::new(false)).collect(),
+            dirty: [0; DIRTY_WORDS],
         }
     }
 }
@@ -21,18 +22,28 @@ impl MemoryMapper for Mem64k {
     }
 
     fn write(&mut self, address: u16, data: u8) {
-        self.data[address as usize] = data;
-        self.dirty[address as usize].set(true);
+        let addr = address as usize;
+        self.data[addr] = data;
+        self.dirty[addr / 64] |= 1 << (addr % 64);
     }
 
-    fn get_dirty(&self) -> Option<Vec<bool>> {
-        Some(self.dirty.iter().map(|c| c.get()).collect())
-    }
-
-    fn clear_dirty(&self) {
-        for c in &self.dirty {
-            c.set(false);
+    fn take_dirty(&mut self) -> Option<Vec<(u16, u8)>> {
+        let mut changed = Vec::new();
+        for (word_index, word) in self.dirty.iter_mut().enumerate() {
+            while *word != 0 {
+                let bit = word.trailing_zeros() as usize;
+                let addr = word_index * 64 + bit;
+                changed.push((addr as u16, self.data[addr]));
+                *word &= *word - 1;
+            }
         }
+        Some(changed)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn mark_dirty(&mut self, address: u16) {
+        let addr = address as usize;
+        self.dirty[addr / 64] |= 1 << (addr % 64);
     }
 }
 
