@@ -13,6 +13,7 @@ use crate::components::devices::DeviceDefinition;
 use crate::ui_traits::DeviceWithUi;
 
 pub mod exec;
+mod files;
 mod formatting;
 mod highlighting;
 mod persistence;
@@ -20,6 +21,8 @@ mod session;
 mod theme;
 mod ui;
 mod workspace;
+
+use files::{FileEvent, FileOrigin, FileService, SaveMode};
 
 pub use persistence::PersistedWorkspace;
 pub use session::DebugSession;
@@ -32,42 +35,6 @@ pub use workspace::{EditorTab, Workspace};
 // list from `z80 files/examples.json`, so a missing example fails the build.
 #[cfg(target_arch = "wasm32")]
 include!(concat!(env!("OUT_DIR"), "/bundled_examples.inc"));
-
-#[cfg(target_arch = "wasm32")]
-use std::sync::mpsc::{Receiver, channel};
-
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::prelude::*;
-
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen(inline_js = "
-export function download_file(filename, text) {
-    var element = document.createElement('a');
-    element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
-    element.setAttribute('download', filename);
-    element.style.display = 'none';
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
-}
-
-export function download_bytes(filename, data) {
-    var blob = new Blob([data], { type: 'application/octet-stream' });
-    var url = URL.createObjectURL(blob);
-    var element = document.createElement('a');
-    element.setAttribute('href', url);
-    element.setAttribute('download', filename);
-    element.style.display = 'none';
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
-    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-}
-")]
-extern "C" {
-    fn download_file(filename: &str, text: &str);
-    fn download_bytes(filename: &str, data: &[u8]);
-}
 
 #[derive(Clone)]
 enum HeaderAction {
@@ -121,20 +88,10 @@ pub struct Z80App {
 
     theme: theme::AppTheme,
 
-    #[cfg(target_arch = "wasm32")]
-    file_receiver: Option<Receiver<(String, String)>>,
-
-    #[cfg(target_arch = "wasm32")]
-    binary_file_receiver: Option<Receiver<(String, Vec<u8>)>>,
+    files: FileService,
 
     #[cfg(target_arch = "wasm32")]
     examples_list: Vec<String>,
-
-    #[cfg(target_arch = "wasm32")]
-    examples_receiver: Option<Receiver<Vec<String>>>,
-
-    #[cfg(target_arch = "wasm32")]
-    example_file_receiver: Option<Receiver<Result<(String, Vec<u8>), String>>>,
 
     show_memory_viewer: bool,
     show_shortcuts: bool,
@@ -200,24 +157,6 @@ fn snapshot_flag(snapshot: &MachineSnapshot, flag: Flag) -> bool {
         Flag::N => snapshot.flags.n,
         Flag::C => snapshot.flags.c,
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn z80_files_url(file: &str) -> Option<String> {
-    let window = web_sys::window()?;
-    let location = window.location();
-    let origin = location.origin().ok()?;
-    let pathname = location.pathname().ok()?;
-
-    let base = if pathname.ends_with('/') {
-        pathname
-    } else if let Some(slash) = pathname.rfind('/') {
-        pathname[..=slash].to_string()
-    } else {
-        "/".to_string()
-    };
-
-    Some(format!("{origin}{base}z80%20files/{file}"))
 }
 
 fn flag_description(flag: Flag) -> &'static str {
@@ -637,15 +576,11 @@ START:
         theme::apply(&cc.egui_ctx);
 
         let mut app = Self::restore_from_storage(cc.storage);
-
-        #[cfg(target_arch = "wasm32")]
-        app.start_examples_fetch(&cc.egui_ctx);
-
+        app.files.start_examples(&cc.egui_ctx);
         app.load_and_reset();
         app
     }
 
-    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     fn open_file_dialog(
         &mut self,
         ctx: &egui::Context,
@@ -653,38 +588,8 @@ START:
     ) {
         // "Open" is for Z80 assembly source only. Use "Load Binary..." to import
         // a raw binary image.
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Assembly", &["asm", "z80"])
-            .add_filter("All files", &["*"])
-            .pick_file()
-        {
-            self.open_file(path, ctx, storage);
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            let task = rfd::AsyncFileDialog::new()
-                .add_filter("Assembly", &["asm", "z80"])
-                .add_filter("All files", &["*"])
-                .pick_file();
-
-            let (sender, receiver) = channel();
-            self.file_receiver = Some(receiver);
-
-            let ctx = ctx.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                let file = task.await;
-                if let Some(file) = file {
-                    let name = file.file_name();
-                    let content = file.read().await;
-                    if let Ok(text) = String::from_utf8(content) {
-                        sender.send((name, text)).ok();
-                    }
-                    ctx.request_repaint();
-                }
-            });
-        }
+        let events = self.files.pick_source(ctx);
+        self.apply_file_events(events, storage);
     }
 
     fn new_file(&mut self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
@@ -735,79 +640,18 @@ START:
     fn open_file(
         &mut self,
         path: PathBuf,
-        _ctx: &egui::Context,
+        ctx: &egui::Context,
         storage: Option<&mut (dyn eframe::Storage + 'static)>,
     ) {
         // Check if already open
-        if let Some(idx) = self
-            .workspace
-            .tabs
-            .iter()
-            .position(|t| t.path.as_ref() == Some(&path))
-        {
-            if self.workspace.active_tab != idx {
-                self.workspace.active_tab = idx;
-                self.workspace.is_assembly_stale = true;
-            }
+        if let Some(idx) = self.workspace.find_tab_by_path(&path) {
+            self.workspace.focus_tab(idx);
             self.save_to_storage(storage);
             return;
         }
 
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            match std::fs::read_to_string(&path) {
-                Ok(content) => {
-                    self.load_file_content(path, content, storage);
-                }
-                Err(err) => {
-                    self.last_error = Some(format!("Failed to open file: {}", err));
-                }
-            }
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            self.load_example(path.to_string_lossy().into_owned(), _ctx, storage);
-        }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn start_examples_fetch(&mut self, ctx: &egui::Context) {
-        let Some(url) = z80_files_url("examples.json") else {
-            return;
-        };
-
-        let (sender, receiver) = channel();
-        self.examples_receiver = Some(receiver);
-
-        let ctx = ctx.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            match reqwest::get(&url).await {
-                Ok(response) if response.status().is_success() => {
-                    match response.json::<Vec<String>>().await {
-                        Ok(examples) => {
-                            sender.send(examples).ok();
-                        }
-                        Err(err) => {
-                            web_sys::console::error_1(
-                                &format!("Failed to parse examples.json: {err}").into(),
-                            );
-                        }
-                    }
-                }
-                Ok(response) => {
-                    web_sys::console::error_1(
-                        &format!("examples.json returned {}", response.status()).into(),
-                    );
-                }
-                Err(err) => {
-                    web_sys::console::error_1(
-                        &format!("Failed to fetch examples.json: {err}").into(),
-                    );
-                }
-            }
-            ctx.request_repaint();
-        });
+        let events = self.files.open_source(&path, ctx);
+        self.apply_file_events(events, storage);
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -815,32 +659,10 @@ START:
         &mut self,
         filename: String,
         ctx: &egui::Context,
-        _storage: Option<&mut (dyn eframe::Storage + 'static)>,
+        storage: Option<&mut (dyn eframe::Storage + 'static)>,
     ) {
-        let Some(url) = z80_files_url(&filename) else {
-            self.last_error = Some("Could not determine the examples URL".into());
-            return;
-        };
-
-        let (sender, receiver) = channel();
-        self.example_file_receiver = Some(receiver);
-
-        let ctx = ctx.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            let result = match reqwest::get(&url).await {
-                Ok(response) if response.status().is_success() => match response.bytes().await {
-                    Ok(bytes) => Ok((filename.clone(), bytes.to_vec())),
-                    Err(err) => Err(format!("Failed to read example '{filename}': {err}")),
-                },
-                Ok(response) => Err(format!(
-                    "Failed to load example '{filename}': HTTP {}",
-                    response.status()
-                )),
-                Err(err) => Err(format!("Failed to load example '{filename}': {err}")),
-            };
-            sender.send(result).ok();
-            ctx.request_repaint();
-        });
+        let events = self.files.open_source(std::path::Path::new(&filename), ctx);
+        self.apply_file_events(events, storage);
     }
 
     fn save_all(&mut self, mut storage: Option<&mut (dyn eframe::Storage + 'static)>) -> bool {
@@ -879,6 +701,17 @@ START:
         self.status_message = Some(format!("Removed {name}"));
     }
 
+    fn tab_save_data(tab: &EditorTab) -> (u64, Option<PathBuf>, String, String) {
+        let name = tab
+            .path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("program.asm")
+            .to_string();
+        (tab.id, tab.path.clone(), name, tab.code.clone())
+    }
+
     fn save_file(&mut self, tab_idx: usize, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
         // A binary tab's `code` is a hexdump, not source. Writing it back would
         // destroy the .bin file it was loaded from.
@@ -893,95 +726,44 @@ START:
             return;
         }
 
-        #[cfg(target_arch = "wasm32")]
+        let Some((tab_id, path, name, text)) =
+            self.workspace.tabs.get(tab_idx).map(Self::tab_save_data)
+        else {
+            return;
+        };
+
+        let save_mode = self.files.save_mode();
+        if tab_idx != self.workspace.active_tab
+            && !(save_mode == SaveMode::InPlace && path.is_some())
         {
-            // On Wasm, we always use "Save As" behavior because we can't write to disk silently
-            if tab_idx == self.workspace.active_tab {
-                self.save_file_as(storage);
-            } else {
-                // Switching tab on wasm needed? Or just ignore background saves?
-                // For now, only save active tab or ignore.
-                // Or temporarily switch active tab?
-                // Simpler to just warn.
-                self.status_message =
-                    Some("Only the active file can be saved on the web".to_string());
-            }
+            self.status_message = Some(
+                match save_mode {
+                    SaveMode::InPlace => "Only the active untitled file can be saved",
+                    SaveMode::Download => "Only the active file can be saved on the web",
+                }
+                .to_string(),
+            );
             return;
         }
 
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let Some(tab) = self.workspace.tabs.get_mut(tab_idx) else {
-                return;
-            };
-            if let Some(path) = &tab.path {
-                let path_clone = path.clone(); // Clone to avoid borrow check issues if we needed it later, but here write takes reference
-                if let Err(err) = std::fs::write(&path_clone, &tab.code) {
-                    self.last_error = Some(format!("Failed to save file: {}", err));
-                } else {
-                    tab.is_dirty = false;
-                    self.status_message = Some(format!("Saved {}", path_clone.display()));
-                }
-            } else {
-                if tab_idx == self.workspace.active_tab {
-                    self.save_file_as(storage);
-                } else {
-                    self.status_message =
-                        Some("Only the active untitled file can be saved".to_string());
-                }
-                return;
-            }
-
-            if let Some(path) = self
-                .workspace
-                .tabs
-                .get(tab_idx)
-                .and_then(|tab| tab.path.as_ref())
-            {
-                self.add_recent_file(path.clone());
-            }
-            self.save_to_storage(storage);
-        }
+        let events = self
+            .files
+            .save_source(tab_id, path.as_deref(), &name, &text);
+        self.apply_file_events(events, storage);
     }
 
     fn save_file_as(&mut self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Assembly", &["asm", "z80"])
-            .save_file()
-        {
-            let Some(tab) = self.workspace.tabs.get_mut(self.workspace.active_tab) else {
-                return;
-            };
-            if let Err(err) = std::fs::write(&path, &tab.code) {
-                self.last_error = Some(format!("Failed to save file: {}", err));
-            } else {
-                tab.path = Some(path.clone());
-                tab.is_dirty = false;
-                self.status_message = Some(format!("Saved {}", path.display()));
-                self.add_recent_file(path);
-                self.save_to_storage(storage);
-            }
-        }
+        let Some((tab_id, _path, name, text)) = self
+            .workspace
+            .tabs
+            .get(self.workspace.active_tab)
+            .map(Self::tab_save_data)
+        else {
+            return;
+        };
 
-        #[cfg(target_arch = "wasm32")]
-        {
-            let Some(tab) = self.workspace.tabs.get_mut(self.workspace.active_tab) else {
-                return;
-            };
-            let name = tab
-                .path
-                .as_ref()
-                .and_then(|p| p.file_name())
-                .and_then(|n| n.to_str())
-                .unwrap_or("program.asm");
-
-            download_file(name, &tab.code);
-            self.status_message = Some(format!("Downloaded {name}"));
-
-            tab.is_dirty = false;
-            self.save_to_storage(storage);
-        }
+        let events = self.files.save_source(tab_id, None, &name, &text);
+        self.apply_file_events(events, storage);
     }
 
     fn assemble_binary_to_file(&mut self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
@@ -997,51 +779,18 @@ START:
 
         match assemble_binary(&code) {
             Ok(bytes) => {
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Binary", &["bin", "rom"])
-                    .add_filter("All files", &["*"])
-                    .save_file()
-                {
-                    if let Err(err) = std::fs::write(&path, &bytes) {
-                        self.last_error = Some(format!("Failed to export binary: {}", err));
-                    } else {
-                        self.last_error = None;
-                        self.status_message = Some(format!(
-                            "Exported {} ({} bytes)",
-                            path.display(),
-                            bytes.len()
-                        ));
-                        self.add_recent_file(path);
-                        self.save_to_storage(storage);
-                    }
-                    return;
-                }
-
-                #[cfg(target_arch = "wasm32")]
-                {
-                    let name = self
-                        .workspace
-                        .tabs
-                        .get(self.workspace.active_tab)
-                        .and_then(|tab| tab.path.as_ref())
-                        .and_then(|p| p.file_stem())
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("program")
-                        .to_string()
-                        + ".bin";
-                    download_bytes(&name, &bytes);
-                    self.last_error = None;
-                    self.status_message =
-                        Some(format!("Exported {} ({} bytes)", name, bytes.len()));
-                    self.save_to_storage(storage);
-                    return;
-                }
-
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    self.status_message = Some("Binary export cancelled".to_string());
-                }
+                let name = self
+                    .workspace
+                    .tabs
+                    .get(self.workspace.active_tab)
+                    .and_then(|tab| tab.path.as_ref())
+                    .and_then(|p| p.file_stem())
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("program")
+                    .to_string()
+                    + ".bin";
+                let events = self.files.export_binary(&name, &bytes);
+                self.apply_file_events(events, storage);
             }
             Err(err) => {
                 self.last_error = Some(format!("Failed to assemble binary: {}", err));
@@ -1049,59 +798,104 @@ START:
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn load_binary_file(
+    fn load_binary_dialog(
         &mut self,
-        path: PathBuf,
+        ctx: &egui::Context,
         storage: Option<&mut (dyn eframe::Storage + 'static)>,
     ) {
-        match std::fs::read(&path) {
-            Ok(bytes) => {
-                self.open_binary_tab(path.clone(), bytes, storage);
-                self.session.reset();
-                self.last_error = None;
-            }
-            Err(err) => {
-                self.last_error = Some(format!("Failed to load binary: {}", err));
-            }
+        let events = self.files.pick_binary(ctx);
+        self.apply_file_events(events, storage);
+    }
+
+    fn apply_file_events(
+        &mut self,
+        events: Vec<FileEvent>,
+        mut storage: Option<&mut (dyn eframe::Storage + 'static)>,
+    ) {
+        for event in events {
+            self.apply_file_event(event, storage.as_deref_mut());
         }
     }
 
-    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
-    fn load_binary_dialog(
+    fn apply_file_event(
         &mut self,
-        _ctx: &egui::Context,
+        event: FileEvent,
         storage: Option<&mut (dyn eframe::Storage + 'static)>,
     ) {
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Binary", &["bin", "rom", "com"])
-            .add_filter("All files", &["*"])
-            .pick_file()
-        {
-            self.load_binary_file(path, storage);
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            let task = rfd::AsyncFileDialog::new()
-                .add_filter("Binary", &["bin", "rom", "com"])
-                .add_filter("All files", &["*"])
-                .pick_file();
-
-            let (sender, receiver) = channel();
-            self.binary_file_receiver = Some(receiver);
-
-            let ctx = _ctx.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                if let Some(file) = task.await {
-                    let name = file.file_name();
-                    let bytes = file.read().await;
-                    sender.send((name, bytes)).ok();
-                    ctx.request_repaint();
+        match event {
+            FileEvent::SourceOpened {
+                origin: FileOrigin::Device,
+                path,
+                content,
+            } => {
+                if let Some(idx) = self.workspace.find_tab_by_path(&path) {
+                    self.workspace.focus_tab(idx);
+                    self.save_to_storage(storage);
+                } else {
+                    self.load_file_content(path, content, storage);
                 }
-            });
+            }
+            FileEvent::SourceOpened {
+                origin: FileOrigin::Example,
+                path,
+                content,
+            } => {
+                self.load_file_content(path.clone(), content, storage);
+                self.status_message = Some(format!("Loaded example {}", path.display()));
+            }
+            FileEvent::BinaryOpened {
+                origin: FileOrigin::Device,
+                path,
+                bytes,
+            } => {
+                self.open_binary_tab(path, bytes, storage);
+                self.last_error = None;
+            }
+            FileEvent::BinaryOpened {
+                origin: FileOrigin::Example,
+                path,
+                bytes,
+            } => {
+                self.open_binary_tab(path, bytes, storage);
+            }
+            FileEvent::SourceSaved { tab_id, path } => {
+                if let Some(tab) = self.workspace.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                    tab.path = Some(path.clone());
+                    tab.is_dirty = false;
+                }
+                self.status_message = Some(format!("Saved {}", path.display()));
+                self.add_recent_file(path);
+                self.save_to_storage(storage);
+            }
+            FileEvent::SourceDownloaded { tab_id, name } => {
+                if let Some(tab) = self.workspace.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                    tab.is_dirty = false;
+                }
+                self.status_message = Some(format!("Downloaded {name}"));
+                self.save_to_storage(storage);
+            }
+            FileEvent::BinaryExported { target, path, len } => {
+                self.last_error = None;
+                self.status_message = Some(format!("Exported {target} ({len} bytes)"));
+                if let Some(path) = path {
+                    self.add_recent_file(path);
+                }
+                self.save_to_storage(storage);
+            }
+            FileEvent::ExportCancelled => {
+                self.status_message = Some("Binary export cancelled".to_string());
+            }
+            #[cfg(target_arch = "wasm32")]
+            FileEvent::ExamplesListed(list) => self.examples_list = list,
+            #[cfg(not(target_arch = "wasm32"))]
+            FileEvent::ExamplesListed(_) => {}
+            FileEvent::Failed(message) => self.last_error = Some(message),
         }
+    }
+
+    fn poll_files(&mut self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
+        let events = self.files.poll();
+        self.apply_file_events(events, storage);
     }
 
     fn process_header_action(
@@ -1199,16 +993,9 @@ impl Default for Z80App {
             attached_devices: Vec::new(),
             attached_device_specs: Vec::new(),
             theme: theme::AppTheme::ONE_DARK,
-            #[cfg(target_arch = "wasm32")]
-            file_receiver: None,
-            #[cfg(target_arch = "wasm32")]
-            binary_file_receiver: None,
+            files: FileService::default(),
             #[cfg(target_arch = "wasm32")]
             examples_list: Vec::new(),
-            #[cfg(target_arch = "wasm32")]
-            examples_receiver: None,
-            #[cfg(target_arch = "wasm32")]
-            example_file_receiver: None,
             show_memory_viewer: false,
             show_shortcuts: false,
             memory_viewer_start: "0000".to_string(),
@@ -1226,66 +1013,7 @@ impl eframe::App for Z80App {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        #[cfg(target_arch = "wasm32")]
-        {
-            if let Some(receiver) = self.file_receiver.take() {
-                while let Ok((name, content)) = receiver.try_recv() {
-                    self.load_file_content(PathBuf::from(name), content, frame.storage_mut());
-                }
-                self.file_receiver = Some(receiver);
-            }
-            if let Some(receiver) = self.binary_file_receiver.take() {
-                while let Ok((name, bytes)) = receiver.try_recv() {
-                    self.open_binary_tab(PathBuf::from(name), bytes, frame.storage_mut());
-                    self.last_error = None;
-                }
-                self.binary_file_receiver = Some(receiver);
-            }
-            if let Some(receiver) = self.example_file_receiver.take() {
-                while let Ok(result) = receiver.try_recv() {
-                    match result {
-                        Ok((name, bytes)) => {
-                            if name.ends_with(".bin") {
-                                self.open_binary_tab(
-                                    PathBuf::from(&name),
-                                    bytes,
-                                    frame.storage_mut(),
-                                );
-                            } else {
-                                match String::from_utf8(bytes) {
-                                    Ok(text) => {
-                                        self.load_file_content(
-                                            PathBuf::from(&name),
-                                            text,
-                                            frame.storage_mut(),
-                                        );
-                                        self.status_message =
-                                            Some(format!("Loaded example {name}"));
-                                    }
-                                    Err(_) => {
-                                        self.last_error =
-                                            Some(format!("Example '{name}' is not valid UTF-8"));
-                                    }
-                                }
-                            }
-                        }
-                        Err(err) => self.last_error = Some(err),
-                    }
-                }
-                self.example_file_receiver = Some(receiver);
-            }
-            if let Some(receiver) = self.examples_receiver.take() {
-                match receiver.try_recv() {
-                    Ok(examples) => self.examples_list = examples,
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        self.examples_receiver = Some(receiver);
-                    }
-                    // The fetch failed (the worker logs the reason). Leave the
-                    // list empty so the menu shows "No examples found".
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
-                }
-            }
-        }
+        self.poll_files(frame.storage_mut());
 
         // Handle window close request
         if ctx.input(|i| i.viewport().close_requested()) {
@@ -1421,9 +1149,19 @@ mod constant_format_tests {
 
 #[cfg(test)]
 mod workspace_load_tests {
+    use super::files::{FileEvent, FileOrigin};
     use super::{EditorTab, EditorTabKind, PersistedWorkspace, STORAGE_KEY, Workspace, Z80App};
     use eframe::Storage;
     use std::collections::{HashMap, HashSet};
+    use std::path::PathBuf;
+
+    fn temp_path(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after the epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("jazz80-app-{}-{nanos}-{name}", std::process::id()))
+    }
 
     #[derive(Default)]
     struct MemoryStorage {
@@ -1523,5 +1261,106 @@ mod workspace_load_tests {
         let restored = Z80App::restore_from_storage(Some(&without_active));
 
         assert_eq!(restored.workspace.active_tab, 0);
+    }
+
+    #[test]
+    fn source_saved_marks_the_tab_clean_and_sets_its_path() {
+        let mut app = Z80App::default();
+        let tab_id = app.workspace.tabs[0].id;
+        app.workspace.tabs[0].is_dirty = true;
+
+        // The native recent-file gate drops paths that do not exist.
+        let path = temp_path("saved.asm");
+        std::fs::write(&path, "").unwrap();
+
+        app.apply_file_event(
+            FileEvent::SourceSaved {
+                tab_id,
+                path: path.clone(),
+            },
+            None,
+        );
+
+        assert!(!app.workspace.tabs[0].is_dirty);
+        assert_eq!(app.workspace.tabs[0].path, Some(path.clone()));
+        assert_eq!(
+            app.status_message,
+            Some(format!("Saved {}", path.display()))
+        );
+        assert_eq!(app.workspace.recent_files.first(), Some(&path));
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn source_downloaded_marks_the_tab_clean() {
+        let mut app = Z80App::default();
+        let tab_id = app.workspace.tabs[0].id;
+        app.workspace.tabs[0].is_dirty = true;
+
+        app.apply_file_event(
+            FileEvent::SourceDownloaded {
+                tab_id,
+                name: "x.asm".to_string(),
+            },
+            None,
+        );
+
+        assert!(!app.workspace.tabs[0].is_dirty);
+        assert_eq!(app.status_message, Some("Downloaded x.asm".to_string()));
+    }
+
+    #[test]
+    fn failed_event_sets_last_error() {
+        let mut app = Z80App::default();
+
+        app.apply_file_event(FileEvent::Failed("boom".to_string()), None);
+
+        assert_eq!(app.last_error, Some("boom".to_string()));
+    }
+
+    #[test]
+    fn binary_exported_sets_status_and_clears_the_error() {
+        let mut app = Z80App {
+            last_error: Some("stale".to_string()),
+            ..Default::default()
+        };
+
+        app.apply_file_event(
+            FileEvent::BinaryExported {
+                target: "x.bin".to_string(),
+                path: None,
+                len: 3,
+            },
+            None,
+        );
+
+        assert_eq!(app.last_error, None);
+        assert_eq!(
+            app.status_message,
+            Some("Exported x.bin (3 bytes)".to_string())
+        );
+    }
+
+    #[test]
+    fn source_opened_for_a_device_dedupes_by_path() {
+        let mut app = Z80App::default();
+        let path = PathBuf::from("already-open.asm");
+        app.workspace.tabs[0].path = Some(path.clone());
+        app.workspace.add_source_tab(None, "NOP".to_string());
+        assert_eq!(app.workspace.tabs.len(), 2);
+        assert_eq!(app.workspace.active_tab, 1);
+
+        app.apply_file_event(
+            FileEvent::SourceOpened {
+                origin: FileOrigin::Device,
+                path,
+                content: "HALT".to_string(),
+            },
+            None,
+        );
+
+        assert_eq!(app.workspace.tabs.len(), 2);
+        assert_eq!(app.workspace.active_tab, 0);
     }
 }

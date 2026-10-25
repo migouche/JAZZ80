@@ -185,7 +185,7 @@ pub(crate) fn show(
         {
             ui.menu_button("Examples", |ui| {
                 if app.examples_list.is_empty() {
-                    let message = if app.examples_receiver.is_some() {
+                    let message = if app.files.examples_pending() {
                         "Loading examples…"
                     } else {
                         "No examples found"

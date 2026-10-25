@@ -1,6 +1,6 @@
 use crate::assembler::{AssemblyLine, AssemblyResult, Symbol};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::SymbolDisplayFormat;
 
@@ -90,6 +90,28 @@ impl Workspace {
 
     pub fn active(&self) -> Option<&EditorTab> {
         self.tabs.get(self.active_tab)
+    }
+
+    /// Index of the tab whose path is exactly `path`.
+    pub fn find_tab_by_path(&self, path: &Path) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|tab| tab.path.as_deref() == Some(path))
+    }
+
+    /// Make `index` the active tab.
+    ///
+    /// Returns `false` when `index` is out of range. The stale flag is set only
+    /// when the active tab actually changes.
+    pub fn focus_tab(&mut self, index: usize) -> bool {
+        if index >= self.tabs.len() {
+            return false;
+        }
+        if self.active_tab != index {
+            self.active_tab = index;
+            self.is_assembly_stale = true;
+        }
+        true
     }
 
     #[allow(dead_code)] // Part of the model API; the UI still indexes directly.
@@ -255,7 +277,7 @@ mod tests {
     use super::{EditorTab, EditorTabKind, Workspace};
     use crate::assembler::assemble_with_metadata;
     use std::collections::HashSet;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn workspace() -> Workspace {
         Workspace::with_default_tab("DEFAULT".to_string())
@@ -388,6 +410,42 @@ mod tests {
         assert!(!workspace.assembly_lines.is_empty());
         assert!(!workspace.is_assembly_stale);
         assert!(workspace.program_loaded);
+    }
+
+    #[test]
+    fn find_tab_by_path_matches_only_the_exact_path() {
+        let mut workspace = workspace();
+        workspace.tabs[0].path = Some(PathBuf::from("one.asm"));
+        workspace.add_source_tab(Some(PathBuf::from("two.asm")), String::new());
+
+        assert_eq!(workspace.find_tab_by_path(Path::new("one.asm")), Some(0));
+        assert_eq!(workspace.find_tab_by_path(Path::new("two.asm")), Some(1));
+        assert_eq!(workspace.find_tab_by_path(Path::new("three.asm")), None);
+
+        // An untitled tab has no path to match.
+        workspace.tabs[0].path = None;
+        assert_eq!(workspace.find_tab_by_path(Path::new("one.asm")), None);
+    }
+
+    #[test]
+    fn focus_tab_reports_out_of_range_and_marks_stale_only_on_change() {
+        let mut workspace = workspace();
+        workspace.add_source_tab(Some(PathBuf::from("two.asm")), String::new());
+        assert_eq!(workspace.active_tab, 1);
+        assert!(!workspace.is_assembly_stale);
+
+        assert!(!workspace.focus_tab(9));
+        assert_eq!(workspace.active_tab, 1);
+        assert!(!workspace.is_assembly_stale);
+
+        assert!(workspace.focus_tab(0));
+        assert_eq!(workspace.active_tab, 0);
+        assert!(workspace.is_assembly_stale);
+
+        workspace.is_assembly_stale = false;
+        assert!(workspace.focus_tab(0));
+        assert_eq!(workspace.active_tab, 0);
+        assert!(!workspace.is_assembly_stale);
     }
 
     #[test]
