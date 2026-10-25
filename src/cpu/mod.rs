@@ -3,6 +3,7 @@
 
 pub mod alu;
 mod block_instructions;
+mod enum_table;
 
 #[cfg(test)]
 use std::collections::VecDeque;
@@ -17,6 +18,8 @@ use crate::{
     },
     traits::{IODevice, MemoryMapper, SynchronousComponent},
 };
+
+use self::enum_table::table_enum;
 
 #[cfg(test)]
 macro_rules! test_log {
@@ -66,65 +69,17 @@ pub enum RegisterPair {
     SP,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum RegOps {
-    B,
-    C,
-    D,
-    E,
-    H,
-    L,
-    HLIndirect,
-    A,
-}
-
-impl TryFrom<u8> for RegOps {
-    type Error = String;
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(RegOps::B),
-            1 => Ok(RegOps::C),
-            2 => Ok(RegOps::D),
-            3 => Ok(RegOps::E),
-            4 => Ok(RegOps::H),
-            5 => Ok(RegOps::L),
-            6 => Ok(RegOps::HLIndirect),
-            7 => Ok(RegOps::A),
-            _ => Err(format!("Invalid RegOps value: {}", value)),
-        }
-    }
-}
-
-impl std::fmt::Display for RegOps {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RegOps::B => write!(f, "B"),
-            RegOps::C => write!(f, "C"),
-            RegOps::D => write!(f, "D"),
-            RegOps::E => write!(f, "E"),
-            RegOps::H => write!(f, "H"),
-            RegOps::L => write!(f, "L"),
-            RegOps::HLIndirect => write!(f, "(HL)"),
-            RegOps::A => write!(f, "A"),
-        }
-    }
-}
-
-impl std::str::FromStr for RegOps {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "B" => Ok(RegOps::B),
-            "C" => Ok(RegOps::C),
-            "D" => Ok(RegOps::D),
-            "E" => Ok(RegOps::E),
-            "H" => Ok(RegOps::H),
-            "L" => Ok(RegOps::L),
-            "(HL)" => Ok(RegOps::HLIndirect),
-            "A" => Ok(RegOps::A),
-            _ => Err(format!("Invalid register: {}", s)),
-        }
+table_enum! {
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub enum RegOps {
+        B = 0 => "B",
+        C = 1 => "C",
+        D = 2 => "D",
+        E = 3 => "E",
+        H = 4 => "H",
+        L = 5 => "L",
+        HLIndirect = 6 => "(HL)",
+        A = 7 => "A",
     }
 }
 
@@ -143,49 +98,13 @@ impl From<RegOps> for AddressingMode {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum RpOps {
-    BC,
-    DE,
-    HL,
-    SP,
-}
-
-impl TryFrom<u8> for RpOps {
-    type Error = String;
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(RpOps::BC),
-            1 => Ok(RpOps::DE),
-            2 => Ok(RpOps::HL),
-            3 => Ok(RpOps::SP),
-            _ => Err(format!("Invalid Rp value: {}", value)),
-        }
-    }
-}
-
-impl std::fmt::Display for RpOps {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RpOps::BC => write!(f, "BC"),
-            RpOps::DE => write!(f, "DE"),
-            RpOps::HL => write!(f, "HL"),
-            RpOps::SP => write!(f, "SP"),
-        }
-    }
-}
-
-impl std::str::FromStr for RpOps {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "BC" => Ok(RpOps::BC),
-            "DE" => Ok(RpOps::DE),
-            "HL" => Ok(RpOps::HL),
-            "SP" => Ok(RpOps::SP),
-            _ => Err(format!("Invalid register pair: {}", s)),
-        }
+table_enum! {
+    #[derive(Debug, Clone, Copy)]
+    pub enum RpOps {
+        BC = 0 => "BC",
+        DE = 1 => "DE",
+        HL = 2 => "HL",
+        SP = 3 => "SP",
     }
 }
 
@@ -200,49 +119,13 @@ impl From<RpOps> for RegisterPair {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum Rp2Ops {
-    BC,
-    DE,
-    HL,
-    AF,
-}
-
-impl TryFrom<u8> for Rp2Ops {
-    type Error = String;
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Rp2Ops::BC),
-            1 => Ok(Rp2Ops::DE),
-            2 => Ok(Rp2Ops::HL),
-            3 => Ok(Rp2Ops::AF),
-            _ => Err(format!("Invalid Rp2 value: {}", value)),
-        }
-    }
-}
-
-impl std::fmt::Display for Rp2Ops {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Rp2Ops::BC => write!(f, "BC"),
-            Rp2Ops::DE => write!(f, "DE"),
-            Rp2Ops::HL => write!(f, "HL"),
-            Rp2Ops::AF => write!(f, "AF"),
-        }
-    }
-}
-
-impl std::str::FromStr for Rp2Ops {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "BC" => Ok(Rp2Ops::BC),
-            "DE" => Ok(Rp2Ops::DE),
-            "HL" => Ok(Rp2Ops::HL),
-            "AF" => Ok(Rp2Ops::AF),
-            _ => Err(format!("Invalid register pair 2: {}", s)),
-        }
+table_enum! {
+    #[derive(Debug, Clone, Copy)]
+    pub enum Rp2Ops {
+        BC = 0 => "BC",
+        DE = 1 => "DE",
+        HL = 2 => "HL",
+        AF = 3 => "AF",
     }
 }
 
@@ -303,66 +186,17 @@ enum AddressingMode {
     ImmediateExtended(u16),
 }
 
-#[derive(PartialEq, Clone, Copy, Debug)]
-pub enum Condition {
-    NZ,
-    Z,
-    NC,
-    C,
-    PO,
-    PE,
-    P,
-    M,
-}
-
-impl TryFrom<u8> for Condition {
-    type Error = String;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Condition::NZ),
-            1 => Ok(Condition::Z),
-            2 => Ok(Condition::NC),
-            3 => Ok(Condition::C),
-            4 => Ok(Condition::PO),
-            5 => Ok(Condition::PE),
-            6 => Ok(Condition::P),
-            7 => Ok(Condition::M),
-            _ => Err(format!("Invalid Condition value: {}", value)),
-        }
-    }
-}
-
-impl std::fmt::Display for Condition {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Condition::NZ => write!(f, "NZ"),
-            Condition::Z => write!(f, "Z"),
-            Condition::NC => write!(f, "NC"),
-            Condition::C => write!(f, "C"),
-            Condition::PO => write!(f, "PO"),
-            Condition::PE => write!(f, "PE"),
-            Condition::P => write!(f, "P"),
-            Condition::M => write!(f, "M"),
-        }
-    }
-}
-
-impl std::str::FromStr for Condition {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "NZ" => Ok(Condition::NZ),
-            "Z" => Ok(Condition::Z),
-            "NC" => Ok(Condition::NC),
-            "C" => Ok(Condition::C),
-            "PO" => Ok(Condition::PO),
-            "PE" => Ok(Condition::PE),
-            "P" => Ok(Condition::P),
-            "M" => Ok(Condition::M),
-            _ => Err(format!("Invalid condition: {}", s)),
-        }
+table_enum! {
+    #[derive(PartialEq, Clone, Copy, Debug)]
+    pub enum Condition {
+        NZ = 0 => "NZ",
+        Z = 1 => "Z",
+        NC = 2 => "NC",
+        C = 3 => "C",
+        PO = 4 => "PO",
+        PE = 5 => "PE",
+        P = 6 => "P",
+        M = 7 => "M",
     }
 }
 
@@ -392,66 +226,17 @@ enum PrefixAddressing {
     IY,
 }
 
-#[derive(PartialEq, Clone, Copy, Debug)]
-pub enum ALUOperation {
-    ADD,
-    ADC,
-    SUB,
-    SBC,
-    AND,
-    XOR,
-    OR,
-    CP,
-}
-
-impl TryFrom<u8> for ALUOperation {
-    type Error = String;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(ALUOperation::ADD),
-            1 => Ok(ALUOperation::ADC),
-            2 => Ok(ALUOperation::SUB),
-            3 => Ok(ALUOperation::SBC),
-            4 => Ok(ALUOperation::AND),
-            5 => Ok(ALUOperation::XOR),
-            6 => Ok(ALUOperation::OR),
-            7 => Ok(ALUOperation::CP),
-            _ => Err(format!("Invalid ALU operation value: {}", value)),
-        }
-    }
-}
-
-impl std::fmt::Display for ALUOperation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ALUOperation::ADD => write!(f, "ADD"),
-            ALUOperation::ADC => write!(f, "ADC"),
-            ALUOperation::SUB => write!(f, "SUB"),
-            ALUOperation::SBC => write!(f, "SBC"),
-            ALUOperation::AND => write!(f, "AND"),
-            ALUOperation::XOR => write!(f, "XOR"),
-            ALUOperation::OR => write!(f, "OR"),
-            ALUOperation::CP => write!(f, "CP"),
-        }
-    }
-}
-
-impl std::str::FromStr for ALUOperation {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "ADD" => Ok(ALUOperation::ADD),
-            "ADC" => Ok(ALUOperation::ADC),
-            "SUB" => Ok(ALUOperation::SUB),
-            "SBC" => Ok(ALUOperation::SBC),
-            "AND" => Ok(ALUOperation::AND),
-            "XOR" => Ok(ALUOperation::XOR),
-            "OR" => Ok(ALUOperation::OR),
-            "CP" => Ok(ALUOperation::CP),
-            _ => Err(format!("Invalid ALU operation: {}", s)),
-        }
+table_enum! {
+    #[derive(PartialEq, Clone, Copy, Debug)]
+    pub enum ALUOperation {
+        ADD = 0 => "ADD",
+        ADC = 1 => "ADC",
+        SUB = 2 => "SUB",
+        SBC = 3 => "SBC",
+        AND = 4 => "AND",
+        XOR = 5 => "XOR",
+        OR = 6 => "OR",
+        CP = 7 => "CP",
     }
 }
 

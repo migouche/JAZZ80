@@ -13,67 +13,20 @@ fn pack_flags(c: bool, n: bool, pv: bool, x: bool, h: bool, y: bool, z: bool, s:
 }
 
 pub mod rot {
+    use crate::cpu::enum_table::table_enum;
     use crate::cpu::flags;
 
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    pub enum RotOperation {
-        RLC,
-        RRC,
-        RL,
-        RR,
-        SLA,
-        SRA,
-        SLL,
-        SRL,
-    }
-
-    impl TryFrom<u8> for RotOperation {
-        type Error = String;
-        fn try_from(value: u8) -> Result<Self, Self::Error> {
-            match value {
-                0 => Ok(RotOperation::RLC),
-                1 => Ok(RotOperation::RRC),
-                2 => Ok(RotOperation::RL),
-                3 => Ok(RotOperation::RR),
-                4 => Ok(RotOperation::SLA),
-                5 => Ok(RotOperation::SRA),
-                6 => Ok(RotOperation::SLL),
-                7 => Ok(RotOperation::SRL),
-                _ => Err(format!("Invalid RotOperation value: {}", value)),
-            }
-        }
-    }
-
-    impl std::fmt::Display for RotOperation {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                RotOperation::RLC => write!(f, "RLC"),
-                RotOperation::RRC => write!(f, "RRC"),
-                RotOperation::RL => write!(f, "RL"),
-                RotOperation::RR => write!(f, "RR"),
-                RotOperation::SLA => write!(f, "SLA"),
-                RotOperation::SRA => write!(f, "SRA"),
-                RotOperation::SLL => write!(f, "SLL"),
-                RotOperation::SRL => write!(f, "SRL"),
-            }
-        }
-    }
-
-    impl std::str::FromStr for RotOperation {
-        type Err = String;
-
-        fn from_str(s: &str) -> Result<Self, Self::Err> {
-            match s {
-                "RLC" => Ok(RotOperation::RLC),
-                "RRC" => Ok(RotOperation::RRC),
-                "RL" => Ok(RotOperation::RL),
-                "RR" => Ok(RotOperation::RR),
-                "SLA" => Ok(RotOperation::SLA),
-                "SRA" => Ok(RotOperation::SRA),
-                "SLL" => Ok(RotOperation::SLL),
-                "SRL" => Ok(RotOperation::SRL),
-                _ => Err(format!("Invalid rotation operation: {}", s)),
-            }
+    table_enum! {
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        pub enum RotOperation {
+            RLC = 0 => "RLC",
+            RRC = 1 => "RRC",
+            RL = 2 => "RL",
+            RR = 3 => "RR",
+            SLA = 4 => "SLA",
+            SRA = 5 => "SRA",
+            SLL = 6 => "SLL",
+            SRL = 7 => "SRL",
         }
     }
 
