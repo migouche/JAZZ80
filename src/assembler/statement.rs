@@ -307,15 +307,6 @@ fn update_data_symbol(
                 .iter()
                 .skip(1)
                 .any(|token| matches!(token, Token::String(_)));
-            let previous_len = if !continuation || matches!(kind, SymbolType::Label) {
-                0
-            } else {
-                match kind {
-                    SymbolType::String(len) | SymbolType::Array(len) => len,
-                    SymbolType::Byte => 1,
-                    _ => 0,
-                }
-            };
             let row_kind = if contains_string {
                 SymbolType::String(bytes.len())
             } else if bytes.len() == 1 {
@@ -334,7 +325,7 @@ fn update_data_symbol(
                     },
                 );
             } else {
-                let total_len = previous_len + bytes.len();
+                let total_len = bytes.len();
                 let new_kind = if contains_string {
                     SymbolType::String(total_len)
                 } else if total_len == 1 {

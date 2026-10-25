@@ -88,6 +88,45 @@ fn test_org_gap() {
 }
 
 #[test]
+fn org_lines_are_recorded_but_not_placed_in_the_image() {
+    let result = assemble_with_metadata("ORG 0x0002\nDB 0xAA\nORG 0x0006\nDB 0xBB").unwrap();
+
+    // Both ORG lines have an AssemblyLine at the address they were parsed at,
+    // including the padding bytes they emit into the flat byte stream.
+    assert_eq!(result.lines[&1].address, 0);
+    assert_eq!(result.lines[&1].bytes, vec![0x00, 0x00]);
+    assert_eq!(result.lines[&3].address, 3);
+    assert_eq!(result.lines[&3].bytes, vec![0x00, 0x00, 0x00]);
+    assert_eq!(result.lines[&2].address, 2);
+    assert_eq!(result.lines[&2].bytes, vec![0xAA]);
+    assert_eq!(result.lines[&4].address, 6);
+    assert_eq!(result.lines[&4].bytes, vec![0xBB]);
+
+    assert_eq!(result.bytes, vec![0x00, 0x00, 0xAA, 0x00, 0x00, 0x00, 0xBB]);
+    assert_eq!(result.image, vec![(2, 0xAA), (6, 0xBB)]);
+
+    // The ORG-only addresses never enter the address-tagged image.
+    for org_address in [0u16, 3] {
+        assert!(
+            !result
+                .image
+                .iter()
+                .any(|(address, _)| *address == org_address),
+            "ORG-only address {org_address} leaked into image"
+        );
+    }
+
+    assert_eq!(result.address_to_line[&0], 1);
+    assert_eq!(result.address_to_line[&2], 2);
+    assert_eq!(result.address_to_line[&3], 3);
+    assert_eq!(result.address_to_line[&6], 4);
+    assert_eq!(result.line_to_address[&1], 0);
+    assert_eq!(result.line_to_address[&2], 2);
+    assert_eq!(result.line_to_address[&3], 3);
+    assert_eq!(result.line_to_address[&4], 6);
+}
+
+#[test]
 fn test_equ_constants() {
     let code = "
         TERM_DATA EQU 80h

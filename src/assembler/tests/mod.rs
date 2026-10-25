@@ -505,6 +505,12 @@ fn test_assembler_errors_logic() {
 }
 
 #[test]
+fn duplicate_label_error_names_the_line_and_label() {
+    let error = assemble_with_metadata("DUP: NOP\nDUP: NOP").unwrap_err();
+    assert_eq!(error, "Line 2: Duplicate label 'DUP'");
+}
+
+#[test]
 fn test_jump_limits() {
     // DJNZ out of range
     let mut code = String::from("start: DJNZ end\n");
