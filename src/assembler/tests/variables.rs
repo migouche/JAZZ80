@@ -1,4 +1,4 @@
-use crate::assembler::assemble_with_metadata;
+use crate::assembler::{SymbolType, assemble_with_metadata};
 
 // Helper to assemble single line
 fn asm(code: &str) -> Vec<u8> {
@@ -107,4 +107,67 @@ fn test_equ_constants() {
     );
     assert_eq!(result.symbols["TERM_DATA"].address, 0x80);
     assert_eq!(result.symbols["TERM_STATUS"].address, 0x81);
+}
+
+#[test]
+fn late_label_referenced_by_early_jump_assembles_with_many_symbols() {
+    let mut code = String::from("JP TARGET\n");
+    for i in 0..50 {
+        code.push_str(&format!("SYM{}: DB {}\n", i, i));
+    }
+    code.push_str("TARGET: NOP\n");
+
+    let result = assemble_with_metadata(&code).unwrap();
+
+    assert_eq!(result.symbols.len(), 51);
+    assert_eq!(result.symbols["TARGET"].address, 53);
+    assert_eq!(result.bytes[0..3], [0xC3, 53, 0]);
+    assert_eq!(result.bytes.len(), 54);
+}
+
+#[test]
+fn db_continuation_with_three_rows_keeps_parent_and_row_symbols() {
+    let code = "DATA: DB 0x11, 0x22\nDB 0x33\nDB 0x44\nDB 0x55";
+    let result = assemble_with_metadata(code).unwrap();
+
+    assert_eq!(result.bytes, vec![0x11, 0x22, 0x33, 0x44, 0x55]);
+
+    // The labelled row owns the first two bytes; each continuation row gets a
+    // `LABEL[line]` sub-symbol at its own address.
+    assert_eq!(result.symbols["DATA"].address, 0);
+    assert_eq!(result.symbols["DATA"].kind, SymbolType::Array(2));
+    assert_eq!(result.symbols["DATA[2]"].address, 2);
+    assert_eq!(result.symbols["DATA[2]"].kind, SymbolType::Byte);
+    assert_eq!(result.symbols["DATA[3]"].address, 3);
+    assert_eq!(result.symbols["DATA[3]"].kind, SymbolType::Byte);
+    assert_eq!(result.symbols["DATA[4]"].address, 4);
+    assert_eq!(result.symbols["DATA[4]"].kind, SymbolType::Byte);
+}
+
+#[test]
+fn equ_referencing_a_later_label_is_an_error() {
+    let error = assemble_with_metadata("VALUE EQU LATER\nLATER: NOP").unwrap_err();
+    assert_eq!(error, "Line 1: Label not found: LATER");
+}
+
+#[test]
+fn string_data_label_continuation_totals_three_bytes() {
+    // The parent keeps the first row's `String(len)`; the continuation row is
+    // recorded as `TEXT[line]` so the GUI can render it on its own row. Their
+    // lengths still add up to the full three-byte string.
+    let result = assemble_with_metadata("TEXT: DB \"Hi\"\nDB \"!\"").unwrap();
+
+    assert_eq!(result.bytes, b"Hi!");
+    assert_eq!(result.symbols["TEXT"].kind, SymbolType::String(2));
+    assert_eq!(result.symbols["TEXT[2]"].address, 2);
+    assert_eq!(result.symbols["TEXT[2]"].kind, SymbolType::String(1));
+
+    let total_len: usize = ["TEXT", "TEXT[2]"]
+        .iter()
+        .map(|name| match result.symbols[*name].kind {
+            SymbolType::String(len) => len,
+            other => panic!("expected a string symbol, got {other:?}"),
+        })
+        .sum();
+    assert_eq!(total_len, 3);
 }
