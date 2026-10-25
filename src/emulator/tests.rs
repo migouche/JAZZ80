@@ -45,6 +45,33 @@ fn consecutive_snapshots_keep_memory_contents() {
 }
 
 #[test]
+fn snapshot_into_reuses_the_buffer_without_changing_contents() {
+    let mut machine = Machine::new();
+    for addr in 0..=u16::MAX {
+        machine.memory_mut().write(addr, (addr as u8) ^ 0x5A);
+    }
+
+    let mut snapshot = machine.snapshot();
+    let buffer = snapshot.memory.as_ptr();
+
+    for addr in 0..=u16::MAX {
+        machine
+            .memory_mut()
+            .write(addr, (addr as u8).wrapping_add(7));
+    }
+    machine.snapshot_into(&mut snapshot);
+
+    assert_eq!(snapshot.memory.as_ptr(), buffer);
+    for addr in 0..=u16::MAX {
+        assert_eq!(
+            snapshot.memory[addr as usize],
+            (addr as u8).wrapping_add(7),
+            "address {addr:#06X}"
+        );
+    }
+}
+
+#[test]
 fn snapshot_delta_only_reports_changed_bytes() {
     let mut machine = Machine::new();
     machine.memory_mut().write(0x1234, 0xAB);

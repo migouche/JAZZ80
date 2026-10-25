@@ -235,7 +235,7 @@ impl ExecutionState {
 
     pub fn refresh_snapshot(&mut self) {
         if let Some(machine) = self.machine.as_mut() {
-            self.snapshot = machine.snapshot();
+            machine.snapshot_into(&mut self.snapshot);
         }
     }
 
@@ -243,9 +243,9 @@ impl ExecutionState {
         for (addr, value) in delta.memory {
             self.snapshot.memory[addr as usize] = value;
         }
-        let memory = std::mem::take(&mut self.snapshot.memory);
-        self.snapshot = delta.state;
-        self.snapshot.memory = memory;
+        let mut state = delta.state;
+        std::mem::swap(&mut state.memory, &mut self.snapshot.memory);
+        self.snapshot = state;
     }
 
     pub fn ensure_machine_reclaimed(&mut self) {
@@ -676,7 +676,7 @@ START:
 
     fn refresh_snapshot(&mut self) {
         if let Some(machine) = self.exec.machine.as_mut() {
-            self.exec.snapshot = machine.snapshot();
+            machine.snapshot_into(&mut self.exec.snapshot);
         }
     }
 
