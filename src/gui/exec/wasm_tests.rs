@@ -85,7 +85,7 @@ fn cooperative_stop_and_commands() {
     let _ = runner.poll();
     let _ = runner.poll();
 
-    runner.send_command(Command::SetInterrupt(true));
+    runner.send_command(Command::PulseInterrupt);
     let machine = runner.take_machine();
     assert!(machine.cpu.is_halted());
 }

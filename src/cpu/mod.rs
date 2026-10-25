@@ -618,8 +618,8 @@ impl Z80A {
         self.nmi_pending = true;
     }
 
-    pub fn set_interrupt(&mut self, active: bool) {
-        self.int_pending = active;
+    pub fn pulse_interrupt(&mut self) {
+        self.int_pending = true;
     }
 
     fn read_io(&mut self, port: u16) -> u8 {
@@ -690,6 +690,7 @@ impl Z80A {
             }
             _ => unreachable!(),
         }
+        self.int_pending = false;
     }
 
     fn fetch(&mut self) -> u8 {
@@ -1461,7 +1462,6 @@ impl Z80A {
             RotOperation::SLL => rot::sll(value),
             RotOperation::SRL => rot::srl(value),
         };
-        self.set_register(GPR::A, flags); // Wait, flags in F? Yes. set_register(GPR::F, flags) likely.
         self.set_register(GPR::F, flags);
         self.write_8(reg.into(), result);
     }

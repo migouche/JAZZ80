@@ -97,6 +97,8 @@ pub(crate) enum EditorTabKind {
 
 #[derive(serde::Deserialize, serde::Serialize, Clone)]
 pub struct EditorTab {
+    #[serde(default)]
+    pub id: u64,
     pub path: Option<PathBuf>,
     pub code: String,
     #[serde(default)]
@@ -175,6 +177,9 @@ pub struct Z80App {
     example_file_receiver: Option<Receiver<Result<(String, Vec<u8>), String>>>,
 
     recent_files: Vec<PathBuf>,
+
+    #[serde(skip)]
+    next_tab_id: u64,
 
     #[serde(skip)]
     show_memory_viewer: bool,
@@ -400,6 +405,18 @@ pub fn run() -> eframe::Result<()> {
 }
 
 impl Z80App {
+    fn alloc_tab_id(&mut self) -> u64 {
+        let id = self.next_tab_id;
+        self.next_tab_id = self.next_tab_id.wrapping_add(1);
+        if id == 0 {
+            let id = self.next_tab_id;
+            self.next_tab_id = self.next_tab_id.wrapping_add(1);
+            id
+        } else {
+            id
+        }
+    }
+
     fn default_code() -> String {
         r"        ORG 0000h
         JP START
@@ -757,8 +774,19 @@ START:
     fn restore_from_storage(storage: Option<&dyn eframe::Storage>) -> Self {
         let mut app = match storage.and_then(|s| eframe::get_value::<Z80App>(s, STORAGE_KEY)) {
             Some(mut loaded_app) => {
+                let mut max_id = 0u64;
+                for tab in &mut loaded_app.tabs {
+                    if tab.id == 0 {
+                        max_id = max_id.wrapping_add(1);
+                        tab.id = max_id;
+                    } else if tab.id > max_id {
+                        max_id = tab.id;
+                    }
+                }
                 if loaded_app.tabs.is_empty() {
+                    max_id = max_id.wrapping_add(1);
                     loaded_app.tabs.push(EditorTab {
+                        id: max_id,
                         path: None,
                         code: Self::default_code(),
                         kind: EditorTabKind::Source,
@@ -767,6 +795,7 @@ START:
                         binary_bytes: None,
                     });
                 }
+                loaded_app.next_tab_id = if max_id == u64::MAX { 1 } else { max_id + 1 };
                 loaded_app.clamp_active_tab();
                 loaded_app
             }
@@ -843,7 +872,9 @@ START:
     }
 
     fn new_file(&mut self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
+        let id = self.alloc_tab_id();
         self.tabs.push(EditorTab {
+            id,
             path: None,
             code: Self::default_code(),
             kind: EditorTabKind::Source,
@@ -893,7 +924,9 @@ START:
         {
             self.active_tab = idx;
         } else {
+            let id = self.alloc_tab_id();
             self.tabs.push(EditorTab {
+                id,
                 path: Some(path.clone()),
                 code: hexdump,
                 kind: EditorTabKind::Binary,
@@ -923,7 +956,16 @@ START:
                 && (current_tab.code.trim().is_empty() || current_tab.code == default_code)
                 && !current_tab.is_dirty
         });
+        let id = if current_is_disposable {
+            self.tabs
+                .get(self.active_tab)
+                .map(|tab| tab.id)
+                .unwrap_or_default()
+        } else {
+            self.alloc_tab_id()
+        };
         let tab = EditorTab {
+            id,
             path: Some(path.clone()),
             code: content,
             kind: EditorTabKind::Source,
@@ -1747,6 +1789,7 @@ impl Default for Z80App {
         Self {
             exec: ExecutionState::new(),
             tabs: vec![EditorTab {
+                id: 1,
                 path: None,
                 breakpoints: HashSet::new(),
                 code: Self::default_code(),
@@ -1754,6 +1797,7 @@ impl Default for Z80App {
                 is_dirty: false,
                 binary_bytes: None,
             }],
+            next_tab_id: 2,
             active_tab: 0,
             last_error: None,
             status_message: None,
@@ -2145,9 +2189,9 @@ impl eframe::App for Z80App {
                     .clicked()
                 {
                     if self.exec.is_running {
-                        self.exec.runner.send_command(Command::SetInterrupt(true));
+                        self.exec.runner.send_command(Command::PulseInterrupt);
                     } else if let Some(machine) = self.exec.machine.as_mut() {
-                        machine.cpu.set_interrupt(true);
+                        machine.cpu.pulse_interrupt();
                         self.refresh_snapshot();
                     }
                 }
@@ -2796,6 +2840,7 @@ impl eframe::App for Z80App {
                     None
                 };
 
+                let tab_id = self.tabs[self.active_tab].id;
                 let current_tab = &mut self.tabs[self.active_tab];
 
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -3055,34 +3100,36 @@ impl eframe::App for Z80App {
                                 (text_width + 24.0).max(ui.available_width());
 
                             egui::ScrollArea::horizontal()
-                                .id_salt("code_hscroll")
+                                .id_salt(("code_hscroll", tab_id))
                                 .auto_shrink([false, true])
                                 .show(ui, |ui| {
-                                    let editor = if is_binary_tab {
-                                        egui::TextEdit::multiline(&mut current_tab.code)
-                                            .font(egui::TextStyle::Monospace)
-                                            .layouter(&mut layouter)
-                                            .code_editor()
-                                            .margin(egui::Margin::symmetric(4, 0))
-                                            .desired_width(desired_width)
-                                            .desired_rows(25)
-                                            .lock_focus(true)
-                                            .interactive(false)
-                                    } else {
-                                        egui::TextEdit::multiline(&mut current_tab.code)
-                                            .font(egui::TextStyle::Monospace)
-                                            .layouter(&mut layouter)
-                                            .code_editor()
-                                            .margin(egui::Margin::symmetric(4, 0))
-                                            .desired_width(desired_width)
-                                            .desired_rows(25)
-                                            .lock_focus(true)
-                                    };
+                                    ui.push_id(tab_id, |ui| {
+                                        let editor = if is_binary_tab {
+                                            egui::TextEdit::multiline(&mut current_tab.code)
+                                                .font(egui::TextStyle::Monospace)
+                                                .layouter(&mut layouter)
+                                                .code_editor()
+                                                .margin(egui::Margin::symmetric(4, 0))
+                                                .desired_width(desired_width)
+                                                .desired_rows(25)
+                                                .lock_focus(true)
+                                                .interactive(false)
+                                        } else {
+                                            egui::TextEdit::multiline(&mut current_tab.code)
+                                                .font(egui::TextStyle::Monospace)
+                                                .layouter(&mut layouter)
+                                                .code_editor()
+                                                .margin(egui::Margin::symmetric(4, 0))
+                                                .desired_width(desired_width)
+                                                .desired_rows(25)
+                                                .lock_focus(true)
+                                        };
 
-                                    if ui.add(editor).changed() && !is_binary_tab {
-                                        current_tab.is_dirty = true;
-                                        self.is_assembly_stale = true;
-                                    }
+                                        if ui.add(editor).changed() && !is_binary_tab {
+                                            current_tab.is_dirty = true;
+                                            self.is_assembly_stale = true;
+                                        }
+                                    });
                                 });
                         });
                     });
@@ -3405,6 +3452,7 @@ mod workspace_load_tests {
 
     fn extra_source_tab() -> EditorTab {
         EditorTab {
+            id: 1,
             path: None,
             code: "NOP".to_string(),
             kind: EditorTabKind::Source,

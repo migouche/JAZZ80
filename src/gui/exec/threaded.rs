@@ -104,7 +104,7 @@ fn worker_loop(
         for command in cmd_rx.try_iter() {
             match command {
                 Command::Nmi => machine.cpu.nmi(),
-                Command::SetInterrupt(v) => machine.cpu.set_interrupt(v),
+                Command::PulseInterrupt => machine.cpu.pulse_interrupt(),
                 Command::SetBreakpoints(bp) => breakpoints = bp,
                 Command::Resume => machine.cpu.set_halted(false),
                 Command::Stop => stop = true,

@@ -177,7 +177,7 @@ fn run_slice_wakes_halted_cpu_on_maskable_interrupt() {
         SliceResult::Halted { cycles: 2 }
     );
 
-    machine.cpu.set_interrupt(true);
+    machine.cpu.pulse_interrupt();
     let mut woke = false;
     for _ in 0..4 {
         let result = machine.run_slice(10, &breakpoints);

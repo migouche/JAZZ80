@@ -16,7 +16,7 @@ pub const SNAPSHOT_INTERVAL: Duration = Duration::from_millis(16);
 #[derive(Clone, Debug)]
 pub enum Command {
     Nmi,
-    SetInterrupt(bool),
+    PulseInterrupt,
     SetBreakpoints(HashSet<u16>),
     Resume,
     #[cfg(not(target_arch = "wasm32"))]
