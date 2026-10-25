@@ -243,28 +243,6 @@ impl ExecutionState {
         self.snapshot.memory = memory;
     }
 
-    pub fn sync_breakpoints(
-        &mut self,
-        line_to_address: &HashMap<usize, u16>,
-        active_tab: usize,
-        tabs: &[EditorTab],
-    ) {
-        let mut addrs = HashSet::new();
-        if let Some(tab) = tabs.get(active_tab) {
-            for &line in &tab.breakpoints {
-                if let Some(&addr) = line_to_address.get(&line) {
-                    addrs.insert(addr);
-                }
-            }
-        }
-        let changed = addrs != self.breakpoint_addrs;
-        self.breakpoint_addrs = addrs;
-        if changed && self.is_running {
-            self.runner
-                .send_command(Command::SetBreakpoints(self.breakpoint_addrs.clone()));
-        }
-    }
-
     pub fn ensure_machine_reclaimed(&mut self) {
         if self.machine.is_none() && !self.runner.is_running() {
             self.machine = Some(self.runner.take_machine());
@@ -3114,6 +3092,11 @@ impl eframe::App for Z80App {
             }
         });
 
+        // Breakpoints may have been toggled in the gutter during this frame. Sync
+        // them before dispatching so a run started by this frame's action sees
+        // the breakpoints the user just set.
+        self.sync_breakpoints();
+
         if let Some(action) = action {
             self.process_header_action(action, &ctx, frame);
         }
@@ -3305,9 +3288,6 @@ impl eframe::App for Z80App {
 
         // Draw separate windows for devices
         self.show_device_windows(&ctx);
-
-        self.exec
-            .sync_breakpoints(&self.line_to_address, self.active_tab, &self.tabs);
     }
 }
 
