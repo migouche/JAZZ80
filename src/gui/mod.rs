@@ -121,6 +121,7 @@ pub struct Z80App {
     exec: ExecutionState,
 
     tabs: Vec<EditorTab>,
+    #[serde(default)]
     active_tab: usize,
 
     #[serde(skip)]
@@ -511,6 +512,14 @@ START:
         action
     }
 
+    fn clamp_active_tab(&mut self) {
+        if self.tabs.is_empty() {
+            self.active_tab = 0;
+        } else if self.active_tab >= self.tabs.len() {
+            self.active_tab = self.tabs.len() - 1;
+        }
+    }
+
     fn active_tab_name(&self) -> String {
         self.tabs
             .get(self.active_tab)
@@ -560,6 +569,9 @@ START:
             self.program_loaded = false;
             self.refresh_snapshot();
             return;
+        }
+        if self.active_tab >= self.tabs.len() {
+            self.active_tab = self.tabs.len() - 1;
         }
 
         let active = self.active_tab;
@@ -764,28 +776,23 @@ START:
         }
     }
 
-    pub fn new(cc: &eframe::CreationContext) -> Self {
-        theme::apply(&cc.egui_ctx);
-
-        let mut app = if let Some(storage) = cc.storage {
-            match eframe::get_value::<Z80App>(storage, STORAGE_KEY) {
-                Some(mut loaded_app) => {
-                    if loaded_app.tabs.is_empty() {
-                        loaded_app.tabs.push(EditorTab {
-                            path: None,
-                            code: Self::default_code(),
-                            kind: EditorTabKind::Source,
-                            is_dirty: false,
-                            breakpoints: HashSet::new(),
-                            binary_bytes: None,
-                        });
-                    }
-                    loaded_app
+    fn restore_from_storage(storage: Option<&dyn eframe::Storage>) -> Self {
+        let mut app = match storage.and_then(|s| eframe::get_value::<Z80App>(s, STORAGE_KEY)) {
+            Some(mut loaded_app) => {
+                if loaded_app.tabs.is_empty() {
+                    loaded_app.tabs.push(EditorTab {
+                        path: None,
+                        code: Self::default_code(),
+                        kind: EditorTabKind::Source,
+                        is_dirty: false,
+                        breakpoints: HashSet::new(),
+                        binary_bytes: None,
+                    });
                 }
-                None => Self::default(),
+                loaded_app.clamp_active_tab();
+                loaded_app
             }
-        } else {
-            Self::default()
+            None => Self::default(),
         };
 
         // Devices are not serialised directly; rebuild them from their specs.
@@ -799,6 +806,14 @@ START:
                 tab.binary_bytes = formatting::parse_hexdump(&tab.code);
             }
         }
+
+        app
+    }
+
+    pub fn new(cc: &eframe::CreationContext) -> Self {
+        theme::apply(&cc.egui_ctx);
+
+        let mut app = Self::restore_from_storage(cc.storage);
 
         #[cfg(target_arch = "wasm32")]
         app.start_examples_fetch(&cc.egui_ctx);
@@ -924,11 +939,12 @@ START:
         storage: Option<&mut (dyn eframe::Storage + 'static)>,
     ) {
         // If current tab is empty (default code or empty) and untitled, replace it
-        let current_tab = &self.tabs[self.active_tab];
         let default_code = Self::default_code();
-        let current_is_disposable = current_tab.path.is_none()
-            && (current_tab.code.trim().is_empty() || current_tab.code == default_code)
-            && !current_tab.is_dirty;
+        let current_is_disposable = self.tabs.get(self.active_tab).is_some_and(|current_tab| {
+            current_tab.path.is_none()
+                && (current_tab.code.trim().is_empty() || current_tab.code == default_code)
+                && !current_tab.is_dirty
+        });
         let tab = EditorTab {
             path: Some(path.clone()),
             code: content,
@@ -939,7 +955,9 @@ START:
         };
 
         if current_is_disposable {
-            self.tabs[self.active_tab] = tab;
+            if let Some(slot) = self.tabs.get_mut(self.active_tab) {
+                *slot = tab;
+            }
         } else {
             self.tabs.push(tab);
             self.active_tab = self.tabs.len() - 1;
@@ -1127,7 +1145,9 @@ START:
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let tab = &mut self.tabs[tab_idx];
+            let Some(tab) = self.tabs.get_mut(tab_idx) else {
+                return;
+            };
             if let Some(path) = &tab.path {
                 let path_clone = path.clone(); // Clone to avoid borrow check issues if we needed it later, but here write takes reference
                 if let Err(err) = std::fs::write(&path_clone, &tab.code) {
@@ -1146,7 +1166,7 @@ START:
                 return;
             }
 
-            if let Some(path) = &self.tabs[tab_idx].path {
+            if let Some(path) = self.tabs.get(tab_idx).and_then(|tab| tab.path.as_ref()) {
                 self.add_recent_file(path.clone());
             }
             self.save_to_storage(storage);
@@ -1159,7 +1179,9 @@ START:
             .add_filter("Assembly", &["asm", "z80"])
             .save_file()
         {
-            let tab = &mut self.tabs[self.active_tab];
+            let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+                return;
+            };
             if let Err(err) = std::fs::write(&path, &tab.code) {
                 self.last_error = Some(format!("Failed to save file: {}", err));
             } else {
@@ -1173,7 +1195,9 @@ START:
 
         #[cfg(target_arch = "wasm32")]
         {
-            let tab = &mut self.tabs[self.active_tab];
+            let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+                return;
+            };
             let name = tab
                 .path
                 .as_ref()
@@ -1221,9 +1245,10 @@ START:
 
                 #[cfg(target_arch = "wasm32")]
                 {
-                    let name = self.tabs[self.active_tab]
-                        .path
-                        .as_ref()
+                    let name = self
+                        .tabs
+                        .get(self.active_tab)
+                        .and_then(|tab| tab.path.as_ref())
                         .and_then(|p| p.file_stem())
                         .and_then(|n| n.to_str())
                         .unwrap_or("program")
@@ -3368,5 +3393,107 @@ mod execution_state_tests {
 
         assert_eq!(state.snapshot.memory[0x1000], 0x11);
         assert_eq!(state.snapshot.memory[0x1001], 0x33);
+    }
+}
+
+#[cfg(test)]
+mod workspace_load_tests {
+    use super::{EditorTab, EditorTabKind, STORAGE_KEY, Z80App};
+    use eframe::Storage;
+    use std::collections::{HashMap, HashSet};
+
+    #[derive(Default)]
+    struct MemoryStorage {
+        values: HashMap<String, String>,
+    }
+
+    impl eframe::Storage for MemoryStorage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.values.get(key).cloned()
+        }
+
+        fn set_string(&mut self, key: &str, value: String) {
+            self.values.insert(key.to_string(), value);
+        }
+
+        fn remove_string(&mut self, key: &str) {
+            self.values.remove(key);
+        }
+
+        fn flush(&mut self) {}
+    }
+
+    fn extra_source_tab() -> EditorTab {
+        EditorTab {
+            path: None,
+            code: "NOP".to_string(),
+            kind: EditorTabKind::Source,
+            is_dirty: false,
+            breakpoints: HashSet::new(),
+            binary_bytes: None,
+        }
+    }
+
+    fn store(app: &Z80App) -> MemoryStorage {
+        let mut storage = MemoryStorage::default();
+        eframe::set_value(&mut storage, STORAGE_KEY, app);
+        storage
+    }
+
+    #[test]
+    fn restore_clamps_an_out_of_range_active_tab() {
+        let mut persisted = Z80App::default();
+        persisted.tabs.push(extra_source_tab());
+        persisted.active_tab = 99;
+
+        let restored = Z80App::restore_from_storage(Some(&store(&persisted)));
+
+        assert_eq!(restored.tabs.len(), 2);
+        assert_eq!(restored.active_tab, 1);
+    }
+
+    #[test]
+    fn restore_keeps_an_in_range_active_tab() {
+        let mut persisted = Z80App::default();
+        persisted.tabs.push(extra_source_tab());
+        persisted.active_tab = 0;
+
+        let restored = Z80App::restore_from_storage(Some(&store(&persisted)));
+
+        assert_eq!(restored.active_tab, 0);
+    }
+
+    #[test]
+    fn restore_of_an_empty_workspace_adds_a_tab_and_resets_the_index() {
+        let mut persisted = Z80App::default();
+        persisted.tabs.clear();
+        persisted.active_tab = 7;
+
+        let restored = Z80App::restore_from_storage(Some(&store(&persisted)));
+
+        assert_eq!(restored.tabs.len(), 1);
+        assert_eq!(restored.active_tab, 0);
+    }
+
+    #[test]
+    fn restore_defaults_a_missing_active_tab_to_zero() {
+        let persisted = Z80App::default();
+        let storage = store(&persisted);
+        let serialized = storage.get_string(STORAGE_KEY).unwrap();
+        let field_start = serialized.find("active_tab:").unwrap();
+        let field_end = field_start + serialized[field_start..].find(',').unwrap();
+        let mut without_active = storage;
+        without_active.set_string(
+            STORAGE_KEY,
+            format!(
+                "{}{}",
+                &serialized[..field_start],
+                &serialized[field_end + 1..]
+            ),
+        );
+
+        let restored = Z80App::restore_from_storage(Some(&without_active));
+
+        assert_eq!(restored.active_tab, 0);
     }
 }
