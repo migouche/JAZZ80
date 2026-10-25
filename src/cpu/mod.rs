@@ -256,20 +256,57 @@ struct GeneralSet {
     l: u8,
 }
 
-pub(super) fn decode_opcode(opcode: u8) -> (u8, u8, u8, u8, bool) // x, y, z, p, q
-    /* See http://www.z80.info/decoding.htm for more information
-    x = the opcode's 1st octal digit (i.e. bits 7-6)
-    y = the opcode's 2nd octal digit (i.e. bits 5-3)
-    z = the opcode's 3rd octal digit (i.e. bits 2-0)
-    p = y rightshifted one position (i.e. bits 5-4)
-    q = y modulo 2 (i.e. bit 3) 
-    */ {
+/// The five fields the Z80 opcode byte is decoded into.
+///
+/// See <http://www.z80.info/decoding.htm> for the decoding table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpcodeParts {
+    /// 1st octal digit (bits 7-6): selects the instruction group.
+    pub x: u8,
+    /// 2nd octal digit (bits 5-3).
+    pub y: u8,
+    /// 3rd octal digit (bits 2-0).
+    pub z: u8,
+    /// `y` shifted right once (bits 5-4): the register-pair index.
+    pub p: u8,
+    /// Low bit of `y` (bit 3): the `q` variant selector.
+    pub q: bool,
+}
+
+impl OpcodeParts {
+    /// Register index: the `r[z]` slot.
+    pub fn reg_index(&self) -> u8 {
+        self.z
+    }
+
+    /// ALU operation index: the `ALU[y]` slot.
+    pub fn alu_op_index(&self) -> u8 {
+        self.y
+    }
+
+    /// Register-pair index: the `rp[p]` / `rp2[p]` slot.
+    pub fn pair_index(&self) -> u8 {
+        self.p
+    }
+
+    /// `q` variant selector: the high bit of `y`.
+    pub fn pair_high(&self) -> bool {
+        self.q
+    }
+}
+
+/// Decodes an opcode byte into its five fields.
+///
+/// See <http://www.z80.info/decoding.htm>: `x` is the 1st octal digit
+/// (bits 7-6), `y` the 2nd (bits 5-3) and `z` the 3rd (bits 2-0); `p` is
+/// `y >> 1` (bits 5-4) and `q` is `y % 2` (bit 3).
+pub(super) fn decode_opcode(opcode: u8) -> OpcodeParts {
     let x = (opcode >> 6) & 0b11;
     let y = (opcode >> 3) & 0b111;
     let z = opcode & 0b111;
     let p = (y >> 1) & 0b11;
     let q = (y & 0b1) == 1;
-    (x, y, z, p, q)
+    OpcodeParts { x, y, z, p, q }
 }
 
 pub struct Z80A {
@@ -1045,29 +1082,29 @@ impl Z80A {
 
     fn decode_cb(&mut self, opcode: u8) {
         test_log!(self, "decode_cb");
-        let (x, y, z, _p, _q) = decode_opcode(opcode);
-        match x {
+        let parts = decode_opcode(opcode);
+        match parts.x {
             0 => {
                 test_log!(self, "rot[y] r[z]");
-                self.rot(y, z) // NOTE: rot[y] r[z]
+                self.rot(parts.y, parts.reg_index()) // NOTE: rot[y] r[z]
             }
             1 => {
                 test_log!(self, "BIT y, r[z]");
-                test_log!(self, "{}", y);
-                let reg = self.table_r(z);
-                self.bit(y, reg.into())
+                test_log!(self, "{}", parts.y);
+                let reg = self.table_r(parts.reg_index());
+                self.bit(parts.y, reg.into())
             } // NOTE: BIT y, r[z]
             2 => {
                 test_log!(self, "RES y, r[z]");
-                test_log!(self, "{}", y);
-                let reg = self.table_r(z);
-                self.res(y, reg.into())
+                test_log!(self, "{}", parts.y);
+                let reg = self.table_r(parts.reg_index());
+                self.res(parts.y, reg.into())
             } // NOTE: RES y, r[z]
             3 => {
                 test_log!(self, "SET y, r[z]");
-                test_log!(self, "{}", y);
-                let reg = self.table_r(z);
-                self.set(y, reg.into())
+                test_log!(self, "{}", parts.y);
+                let reg = self.table_r(parts.reg_index());
+                self.set(parts.y, reg.into())
             } // NOTE: SET y, r[z]
             _ => unreachable!("Invalid x value"), // should never happen
         }
@@ -1118,16 +1155,16 @@ impl Z80A {
             IndexRegister::IX => test_log!(self, "decode_ddcb"),
             IndexRegister::IY => test_log!(self, "decode_fdcb"),
         }
-        let (x, y, z, _p, _q) = decode_opcode(opcode);
+        let parts = decode_opcode(opcode);
         let addressing_mode = AddressingMode::Indexed(indexing, displacement as i8);
 
-        match x {
+        match parts.x {
             0 => {
                 // rot[y] (IX/IY+d)
                 test_log!(self, "rot[y] ({:?} + d)", indexing);
                 // Fetch value from (IX/IY+d)
                 let value = self.read_8(addressing_mode);
-                let operation = self.table_rot(y);
+                let operation = self.table_rot(parts.y);
 
                 // Perform rotation
                 let (result, flags) = match operation {
@@ -1145,8 +1182,8 @@ impl Z80A {
                 self.write_8(addressing_mode, result);
 
                 // Undocumented: copy result to register if z != 6
-                if z != 6 {
-                    let dest_reg = self.table_r(z);
+                if parts.reg_index() != 6 {
+                    let dest_reg = self.table_r(parts.reg_index());
                     self.write_8(dest_reg.into(), result);
                 }
             }
@@ -1154,18 +1191,18 @@ impl Z80A {
                 test_log!(self, "BIT y, ({:?} + d)", indexing);
                 // Standard BIT instruction on (IX/IY+d)
                 // z is ignored (typically 6, but others behave same)
-                self.bit(y, addressing_mode);
+                self.bit(parts.y, addressing_mode);
             }
             2 => {
                 test_log!(self, "RES y, ({:?} + d)", indexing);
                 // Perform RES on (IX/IY+d)
                 let value = self.read_8(addressing_mode);
-                let result = res(value, y);
+                let result = res(value, parts.y);
                 self.write_8(addressing_mode, result);
 
                 // Undocumented: copy result to register if z != 6
-                if z != 6 {
-                    let dest_reg = self.table_r(z);
+                if parts.reg_index() != 6 {
+                    let dest_reg = self.table_r(parts.reg_index());
                     self.write_8(dest_reg.into(), result);
                 }
             }
@@ -1173,12 +1210,12 @@ impl Z80A {
                 test_log!(self, "SET y, ({:?} + d)", indexing);
                 // Perform SET on (IX/IY+d)
                 let value = self.read_8(addressing_mode);
-                let result = set(value, y);
+                let result = set(value, parts.y);
                 self.write_8(addressing_mode, result);
 
                 // Undocumented: copy result to register if z != 6
-                if z != 6 {
-                    let dest_reg = self.table_r(z);
+                if parts.reg_index() != 6 {
+                    let dest_reg = self.table_r(parts.reg_index());
                     self.write_8(dest_reg.into(), result);
                 }
             }
