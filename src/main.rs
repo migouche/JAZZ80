@@ -3,6 +3,7 @@ mod components;
 mod cpu;
 mod emulator;
 mod gui;
+mod locking;
 mod traits;
 mod ui_traits;
 

@@ -44,15 +44,11 @@ impl DeviceWithUi for NmiTrigger {
     }
 
     fn draw(&mut self, ctx: &egui::Context) {
-        let mut open = self.is_open;
-        egui::Window::new(self.get_name())
-            .open(&mut open)
-            .show(ctx, |ui| {
-                self.triggered = ui
-                    .button("TRIGGER NMI")
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .clicked();
-            });
-        self.is_open = open;
+        self.show_window(ctx, None, &mut |this, ui| {
+            this.triggered = ui
+                .button("TRIGGER NMI")
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked();
+        });
     }
 }

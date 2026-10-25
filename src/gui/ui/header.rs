@@ -2,6 +2,7 @@ use eframe::egui;
 
 use super::super::{HeaderAction, ModalType, Z80App};
 use crate::gui::exec::{Command, Runner};
+use crate::locking::lock_or_recover;
 
 pub(crate) fn show(
     app: &mut Z80App,
@@ -141,9 +142,9 @@ pub(crate) fn show(
                 ui.label(egui::RichText::new("Attached").strong());
                 let mut remove = None;
                 for (idx, dev) in app.attached_devices.iter().enumerate() {
-                    let name = dev.lock().unwrap().get_name();
+                    let name = lock_or_recover(dev).get_name();
                     ui.horizontal(|ui| {
-                        let mut dev_ref = dev.lock().unwrap();
+                        let mut dev_ref = lock_or_recover(dev);
                         let mut open = dev_ref.get_window_open_state();
                         if ui.checkbox(&mut open, &name).changed() {
                             dev_ref.set_window_open_state(open);

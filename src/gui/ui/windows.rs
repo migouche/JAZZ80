@@ -1,6 +1,7 @@
 use eframe::egui;
 
 use super::super::{Z80App, parse_hex_u16};
+use crate::locking::lock_or_recover;
 
 pub(crate) fn show_shortcuts(app: &mut Z80App, ctx: &egui::Context) {
     if app.show_shortcuts {
@@ -146,6 +147,6 @@ pub(crate) fn show_memory_viewer(app: &mut Z80App, ui: &mut egui::Ui) {
 
 pub(crate) fn show_devices(app: &mut Z80App, ctx: &egui::Context) {
     for device in &app.attached_devices {
-        device.lock().unwrap().draw(ctx);
+        lock_or_recover(device).draw(ctx);
     }
 }

@@ -16,6 +16,7 @@ use crate::{
         rot::{self, RotOperation},
         set, sub_16,
     },
+    locking::lock_or_recover,
     traits::{IODevice, MemoryMapper, SynchronousComponent},
 };
 
@@ -446,7 +447,7 @@ impl Z80A {
 
     fn read_io(&mut self, port: u16) -> u8 {
         for dev in &self.devices {
-            if let Some(val) = dev.lock().unwrap().read_in(port) {
+            if let Some(val) = lock_or_recover(dev).read_in(port) {
                 return val;
             }
         }
@@ -455,7 +456,7 @@ impl Z80A {
 
     fn write_io(&mut self, port: u16, data: u8) {
         for dev in &self.devices {
-            if dev.lock().unwrap().write_out(port, data) {
+            if lock_or_recover(dev).write_out(port, data) {
                 return;
             }
         }
@@ -466,7 +467,7 @@ impl Z80A {
             return true;
         }
         for dev in &self.devices {
-            if dev.lock().unwrap().poll_interrupt() {
+            if lock_or_recover(dev).poll_interrupt() {
                 return true;
             }
         }
@@ -475,8 +476,8 @@ impl Z80A {
 
     fn ack_interrupt(&mut self) -> u8 {
         for dev in &self.devices {
-            if dev.lock().unwrap().poll_interrupt() {
-                return dev.lock().unwrap().ack_interrupt();
+            if lock_or_recover(dev).poll_interrupt() {
+                return lock_or_recover(dev).ack_interrupt();
             }
         }
         0xFF
@@ -1374,7 +1375,7 @@ impl Z80A {
     fn poll_nmi(&mut self) {
         let mut nmi_active = false;
         for dev in &self.devices {
-            if dev.lock().unwrap().poll_nmi() {
+            if lock_or_recover(dev).poll_nmi() {
                 nmi_active = true;
                 break;
             }

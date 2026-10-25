@@ -2,6 +2,7 @@ use crate::assembler::{assemble_binary, assemble_with_metadata};
 use crate::cpu::{Flag, GPR};
 use crate::emulator::{Machine, MachineSnapshot};
 use crate::gui::exec::{Command, Event, Runner};
+use crate::locking::lock_or_recover;
 use crate::traits::SynchronousComponent;
 use eframe::egui;
 use std::collections::HashSet;
@@ -342,7 +343,7 @@ START:
         {
             let machine = self.session.machine_mut().unwrap();
             for device in &self.attached_devices {
-                device.lock().unwrap().reset();
+                lock_or_recover(device).reset();
                 machine.cpu.attach_device(device.clone());
             }
         }
@@ -684,7 +685,7 @@ START:
         if idx >= self.attached_devices.len() {
             return;
         }
-        let name = self.attached_devices[idx].lock().unwrap().get_name();
+        let name = lock_or_recover(&self.attached_devices[idx]).get_name();
         self.attached_devices.remove(idx);
         if idx < self.attached_device_specs.len() {
             self.attached_device_specs.remove(idx);
