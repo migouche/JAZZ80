@@ -1,5 +1,5 @@
 #![allow(clippy::upper_case_acronyms)]
-#![cfg_attr(test, allow(clippy::too_many_arguments, clippy::type_complexity))]
+#![cfg_attr(test, allow(clippy::too_many_arguments))]
 
 pub mod alu;
 mod block_instructions;

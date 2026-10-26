@@ -98,15 +98,15 @@ impl AppTheme {
         tab_active_fg: palette::TAB_ACTIVE_TEXT,
         // Syntax
         syntax: SyntaxColors {
-            comment: palette::GREY,     // Grey
-            mnemonic: palette::PURPLE,  // Purple
-            register: palette::YELLOW,  // Gold/Yellow
-            condition: palette::RED,    // Red/Pink
-            number: palette::ORANGE,    // Orange
-            label: palette::BLUE,       // Blue
-            directive: palette::CYAN,   // Cyan
-            string: palette::GREEN,     // Green
-            plain: palette::FOREGROUND, // White-ish
+            comment: palette::GREY,
+            mnemonic: palette::PURPLE,
+            register: palette::YELLOW,
+            condition: palette::RED,
+            number: palette::ORANGE,
+            label: palette::BLUE,
+            directive: palette::CYAN,
+            string: palette::GREEN,
+            plain: palette::FOREGROUND,
         },
     };
 

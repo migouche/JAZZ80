@@ -2,7 +2,9 @@ use crate::traits::SynchronousComponent;
 
 const DAA_OPCODE: u8 = 0x27;
 
-fn parse_line_to_test_case(line: &str) -> Option<(u8, bool, bool, bool, u8, bool, bool, bool)> {
+type ParsedDaCase = (u8, bool, bool, bool, u8, bool, bool, bool);
+
+fn parse_line_to_test_case(line: &str) -> Option<ParsedDaCase> {
     let mut parts = line.split_whitespace();
 
     if parts.next()? != "N" {

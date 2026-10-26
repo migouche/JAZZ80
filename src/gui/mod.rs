@@ -315,6 +315,7 @@ START:
         })
         .collect()
     }
+
     fn check_shortcuts(&self, ctx: &egui::Context) -> Option<HeaderAction> {
         let mut action = None;
         let mut binds = Self::keybinds();
