@@ -173,17 +173,18 @@ pub fn highlight(
     job
 }
 
-/// The laid-out galley for one source buffer.
+/// The token layout for one source buffer.
 ///
-/// `TextEdit` runs its layouter every frame; rebuilding the token layout when
-/// neither the text nor the highlighted line changed is wasted work. The cache
-/// is keyed by the exact text and line, so a stale galley can never be
-/// returned.
+/// `TextEdit` runs its layouter every frame; re-tokenising when neither the
+/// text nor the highlighted line changed is wasted work, so the `LayoutJob`
+/// itself is cached. egui lays that job out on every call for the current
+/// `pixels_per_point` (and font atlas), so zoom and DPI changes cannot leave
+/// the editor showing a galley at a stale scale.
 #[derive(Default)]
 pub struct HighlightCache {
     code: String,
     highlight_line: Option<usize>,
-    galley: Option<std::sync::Arc<egui::Galley>>,
+    job: Option<egui::text::LayoutJob>,
     #[cfg(test)]
     builds: usize,
 }
@@ -197,12 +198,9 @@ impl HighlightCache {
         highlight_line: Option<usize>,
     ) -> std::sync::Arc<egui::Galley> {
         let stale =
-            self.galley.is_none() || self.code != code || self.highlight_line != highlight_line;
+            self.job.is_none() || self.code != code || self.highlight_line != highlight_line;
         if stale {
-            self.galley = Some(
-                ui.painter()
-                    .layout_job(highlight(theme, code, highlight_line)),
-            );
+            self.job = Some(highlight(theme, code, highlight_line));
             self.code.clear();
             self.code.push_str(code);
             self.highlight_line = highlight_line;
@@ -211,7 +209,8 @@ impl HighlightCache {
                 self.builds += 1;
             }
         }
-        std::sync::Arc::clone(self.galley.as_ref().expect("populated above"))
+        ui.painter()
+            .layout_job(self.job.as_ref().expect("populated above").clone())
     }
 }
 
@@ -317,8 +316,9 @@ mod tests {
             (first, second)
         });
 
-        assert!(std::sync::Arc::ptr_eq(&first, &second));
         assert_eq!(cache.builds, 1);
+        assert_eq!(first.text(), "LD A, 1");
+        assert_eq!(second.text(), "LD A, 1");
     }
 
     #[test]
@@ -326,14 +326,13 @@ mod tests {
         let theme = AppTheme::ONE_DARK;
         let mut cache = HighlightCache::default();
 
-        let (first, second) = run_frame(&egui::Context::default(), |ui| {
+        let (_first, second) = run_frame(&egui::Context::default(), |ui| {
             let first = cache.galley(ui, &theme, "LD A, 1", None);
             let second = cache.galley(ui, &theme, "LD A, 2", None);
             (first, second)
         });
 
         assert_eq!(cache.builds, 2);
-        assert!(!std::sync::Arc::ptr_eq(&first, &second));
         assert_eq!(second.text(), "LD A, 2");
     }
 
@@ -349,7 +348,8 @@ mod tests {
         });
 
         assert_eq!(cache.builds, 2);
-        assert!(!std::sync::Arc::ptr_eq(&first, &second));
+        assert_eq!(first.text(), "LD A, 1");
+        assert_eq!(second.text(), "LD A, 1");
     }
 
     #[test]
@@ -362,6 +362,26 @@ mod tests {
         let second = run_frame(&ctx, |ui| cache.galley(ui, &theme, "LD A, 1", None));
 
         assert_eq!(cache.builds, 1);
-        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert_eq!(first.text(), "LD A, 1");
+        assert_eq!(second.text(), "LD A, 1");
+    }
+
+    #[test]
+    fn cache_job_is_relaid_out_when_pixels_per_point_changes() {
+        let theme = AppTheme::ONE_DARK;
+        let ctx = egui::Context::default();
+        let mut cache = HighlightCache::default();
+
+        let first = run_frame(&ctx, |ui| cache.galley(ui, &theme, "LD A, 1", None));
+
+        ctx.set_pixels_per_point(2.0);
+        let second = run_frame(&ctx, |ui| cache.galley(ui, &theme, "LD A, 1", None));
+
+        assert_eq!(cache.builds, 1, "tokenisation should have been reused");
+        assert!(
+            !std::sync::Arc::ptr_eq(&first, &second),
+            "egui should lay the job out again for the new scale"
+        );
+        assert_eq!(second.text(), "LD A, 1");
     }
 }
