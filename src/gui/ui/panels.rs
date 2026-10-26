@@ -379,7 +379,7 @@ pub(crate) fn show_variables(app: &mut Z80App, ui: &mut egui::Ui) {
                                                     .collect();
 
                                                 if bytes.len() < full_bytes.len() {
-                                                    ui.monospace(format!("\"{}\"...", s))
+                                                    ui.monospace(format!("\"{}\"…", s))
                                                         .on_hover_text(format!(
                                                             "Length: {}\nFull: \"{}\"",
                                                             len, full_s
@@ -497,9 +497,10 @@ pub(crate) fn show_variables(app: &mut Z80App, ui: &mut egui::Ui) {
                                     }
 
                                     if truncated_visual {
-                                        ui.monospace(format!("\"{}\"...", s)).on_hover_text(
-                                            format!("Allocated: {}\nString: \"{}\"", len, full_s),
-                                        );
+                                        ui.monospace(format!("\"{}\"…", s)).on_hover_text(format!(
+                                            "Allocated: {}\nString: \"{}\"",
+                                            len, full_s
+                                        ));
                                     } else {
                                         // Not truncated visually, so 's' is the full string (or at least as much as fits in allocated)
                                         ui.monospace(format!("\"{}\"", s)).on_hover_text(format!(

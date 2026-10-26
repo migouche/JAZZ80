@@ -139,7 +139,7 @@ impl DeviceWithUi for VirtualTerminal {
             ui.horizontal(|ui| {
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut this.input_string)
-                        .hint_text("Type and press Enter...")
+                        .hint_text("Type and press Enter…")
                         .desired_width(200.0),
                 );
 

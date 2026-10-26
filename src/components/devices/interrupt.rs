@@ -85,7 +85,7 @@ impl DeviceWithUi for GenericInterruptDevice {
                 }
 
                 if this.interrupt_pending {
-                    ui.colored_label(egui::Color32::RED, "Interrupt Pending...");
+                    ui.colored_label(egui::Color32::RED, "Interrupt Pending…");
                 } else {
                     ui.label("Idle");
                 }

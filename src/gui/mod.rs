@@ -47,9 +47,55 @@ enum HeaderAction {
     AssembleBinary,
     LoadBinary,
     CloseTab(usize),
+    CloseActiveTab,
     ToggleRun,
     StepInstruction,
     Quit,
+}
+
+impl HeaderAction {
+    fn shortcut(&self) -> Option<(egui::Modifiers, egui::Key)> {
+        use egui::{Key, Modifiers};
+        match self {
+            Self::ToggleRun => Some((Modifiers::NONE, Key::F5)),
+            Self::StepInstruction => Some((Modifiers::NONE, Key::F8)),
+            Self::NewFile => Some((Modifiers::COMMAND, Key::N)),
+            Self::OpenFileDialog => Some((Modifiers::COMMAND, Key::O)),
+            Self::SaveFile => Some((Modifiers::COMMAND, Key::S)),
+            Self::SaveFileAs => Some((Modifiers::COMMAND | Modifiers::SHIFT, Key::S)),
+            Self::CloseActiveTab => Some((Modifiers::COMMAND, Key::W)),
+            Self::OpenFile(_)
+            | Self::AssembleBinary
+            | Self::LoadBinary
+            | Self::CloseTab(_)
+            | Self::Quit => None,
+        }
+    }
+
+    /// The label used by the keyboard-shortcuts dialog.
+    fn label(&self) -> &'static str {
+        match self {
+            Self::ToggleRun => "Run / Stop",
+            Self::StepInstruction => "Step one instruction",
+            Self::NewFile => "New file",
+            Self::OpenFileDialog => "Open file",
+            Self::SaveFile => "Save",
+            Self::SaveFileAs => "Save as",
+            Self::CloseActiveTab | Self::CloseTab(_) => "Close tab",
+            Self::OpenFile(_) => "Open file",
+            Self::AssembleBinary => "Assemble to binary",
+            Self::LoadBinary => "Load binary",
+            Self::Quit => "Quit",
+        }
+    }
+
+    fn shortcut_text(&self, ctx: &egui::Context) -> String {
+        self.shortcut()
+            .map(|(modifiers, key)| {
+                ctx.format_shortcut(&egui::KeyboardShortcut::new(modifiers, key))
+            })
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Clone)]
@@ -252,43 +298,22 @@ START:
     }
 
     fn keybinds() -> Vec<(egui::Modifiers, egui::Key, HeaderAction)> {
-        vec![
-            (
-                egui::Modifiers::COMMAND,
-                egui::Key::N,
-                HeaderAction::NewFile,
-            ),
-            (
-                egui::Modifiers::COMMAND,
-                egui::Key::S,
-                HeaderAction::SaveFile,
-            ),
-            (
-                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-                egui::Key::S,
-                HeaderAction::SaveFileAs,
-            ),
-            (
-                egui::Modifiers::COMMAND,
-                egui::Key::O,
-                HeaderAction::OpenFileDialog,
-            ),
-            (
-                egui::Modifiers::NONE,
-                egui::Key::F5,
-                HeaderAction::ToggleRun,
-            ),
-            (
-                egui::Modifiers::NONE,
-                egui::Key::F8,
-                HeaderAction::StepInstruction,
-            ),
-            (
-                egui::Modifiers::COMMAND,
-                egui::Key::W,
-                HeaderAction::CloseTab(usize::MAX),
-            ),
+        [
+            HeaderAction::ToggleRun,
+            HeaderAction::StepInstruction,
+            HeaderAction::NewFile,
+            HeaderAction::OpenFileDialog,
+            HeaderAction::SaveFile,
+            HeaderAction::SaveFileAs,
+            HeaderAction::CloseActiveTab,
         ]
+        .into_iter()
+        .filter_map(|action| {
+            action
+                .shortcut()
+                .map(|(modifiers, key)| (modifiers, key, action))
+        })
+        .collect()
     }
     /*
         fn line_to_str(&self, line: &str, i: usize) -> String {
@@ -474,29 +499,23 @@ START:
         }
     }
 
-    fn resume_from_halt(&mut self) {
-        if self.session.is_running() {
-            self.session.runner_mut().send_command(Command::Resume);
-        } else if let Some(machine) = self.session.machine_mut() {
-            machine.cpu.set_halted(false);
-            self.session.refresh_snapshot();
-        }
-    }
-
     fn toggle_execution(&mut self) {
-        if self.session.is_running() {
-            self.stop_execution();
-            return;
-        }
-        if !self.workspace.program_loaded {
-            return;
-        }
-
         if self.session.snapshot().halted {
+            if self.session.is_running() {
+                self.session.runner_mut().send_command(Command::Resume);
+                return;
+            }
             if let Some(machine) = self.session.machine_mut() {
                 machine.cpu.set_halted(false);
             }
             self.session.refresh_snapshot();
+        } else if self.session.is_running() {
+            self.stop_execution();
+            return;
+        }
+
+        if !self.workspace.program_loaded {
+            return;
         }
 
         if self
@@ -588,7 +607,7 @@ START:
         ctx: &egui::Context,
         storage: Option<&mut (dyn eframe::Storage + 'static)>,
     ) {
-        // "Open" is for Z80 assembly source only. Use "Load Binary..." to import
+        // "Open" is for Z80 assembly source only. Use "Load Binary…" to import
         // a raw binary image.
         let events = self.files.pick_source(ctx);
         self.apply_file_events(events, storage);
@@ -598,6 +617,21 @@ START:
         self.workspace.add_source_tab(None, Self::default_code());
         self.workspace.is_assembly_stale = true;
         self.save_to_storage(storage);
+    }
+
+    fn request_close_tab(
+        &mut self,
+        index: usize,
+        storage: Option<&mut (dyn eframe::Storage + 'static)>,
+    ) {
+        if index >= self.workspace.tabs.len() {
+            return;
+        }
+        if self.workspace.tabs[index].is_dirty {
+            self.pending_modal = Some(ModalType::CloseTab(index));
+        } else {
+            self.close_tab(index, storage);
+        }
     }
 
     fn close_tab(&mut self, index: usize, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
@@ -916,20 +950,10 @@ START:
             HeaderAction::SaveFileAs => self.save_file_as(frame.storage_mut()),
             HeaderAction::AssembleBinary => self.assemble_binary_to_file(frame.storage_mut()),
             HeaderAction::LoadBinary => self.load_binary_dialog(ctx, frame.storage_mut()),
-            HeaderAction::CloseTab(idx) => {
-                let idx = if idx == usize::MAX {
-                    self.workspace.active_tab
-                } else {
-                    idx
-                };
-                if idx >= self.workspace.tabs.len() {
-                    return;
-                }
-                if self.workspace.tabs[idx].is_dirty {
-                    self.pending_modal = Some(ModalType::CloseTab(idx));
-                } else {
-                    self.close_tab(idx, frame.storage_mut());
-                }
+            HeaderAction::CloseTab(index) => self.request_close_tab(index, frame.storage_mut()),
+            HeaderAction::CloseActiveTab => {
+                let index = self.workspace.active_tab;
+                self.request_close_tab(index, frame.storage_mut())
             }
             HeaderAction::ToggleRun => self.toggle_execution(),
             HeaderAction::StepInstruction => self.step_instruction(),

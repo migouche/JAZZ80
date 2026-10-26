@@ -11,26 +11,21 @@ pub(crate) fn show_shortcuts(app: &mut Z80App, ctx: &egui::Context) {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .open(&mut app.show_shortcuts)
             .show(ctx, |ui| {
-                let rows = [
-                    ("Run / Stop", "F5"),
-                    ("Step one instruction", "F8"),
-                    ("New file", "Ctrl+N"),
-                    ("Open file", "Ctrl+O"),
-                    ("Save", "Ctrl+S"),
-                    ("Save as", "Ctrl+Shift+S"),
-                    ("Close tab", "Ctrl+W"),
-                    ("Toggle breakpoint", "Click the gutter"),
-                ];
                 egui::Grid::new("shortcuts_grid")
                     .num_columns(2)
                     .spacing([24.0, 6.0])
                     .striped(true)
                     .show(ui, |ui| {
-                        for (action, keys) in rows {
-                            ui.label(action);
-                            ui.monospace(keys);
+                        for (modifiers, key, action) in Z80App::keybinds() {
+                            ui.label(action.label());
+                            ui.monospace(
+                                ctx.format_shortcut(&egui::KeyboardShortcut::new(modifiers, key)),
+                            );
                             ui.end_row();
                         }
+                        ui.label("Toggle breakpoint");
+                        ui.monospace("Click the gutter");
+                        ui.end_row();
                     });
             });
     }

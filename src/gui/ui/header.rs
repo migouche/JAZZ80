@@ -15,10 +15,15 @@ pub(crate) fn show(
 
     let mut action = None;
 
+    let new_shortcut = HeaderAction::NewFile.shortcut_text(ui.ctx());
+    let open_shortcut = HeaderAction::OpenFileDialog.shortcut_text(ui.ctx());
+    let save_shortcut = HeaderAction::SaveFile.shortcut_text(ui.ctx());
+    let save_as_shortcut = HeaderAction::SaveFileAs.shortcut_text(ui.ctx());
+
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button("File", |ui| {
             if ui
-                .add(egui::Button::new("New").shortcut_text("Ctrl+N"))
+                .add(egui::Button::new("New").shortcut_text(new_shortcut))
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked()
             {
@@ -26,7 +31,7 @@ pub(crate) fn show(
                 ui.close();
             }
             if ui
-                .add(egui::Button::new("Open...").shortcut_text("Ctrl+O"))
+                .add(egui::Button::new("Open…").shortcut_text(open_shortcut))
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked()
             {
@@ -60,7 +65,7 @@ pub(crate) fn show(
             ui.separator();
 
             if ui
-                .add(egui::Button::new("Save").shortcut_text("Ctrl+S"))
+                .add(egui::Button::new("Save").shortcut_text(save_shortcut))
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked()
             {
@@ -68,7 +73,7 @@ pub(crate) fn show(
                 ui.close();
             }
             if ui
-                .add(egui::Button::new("Save As...").shortcut_text("Ctrl+Shift+S"))
+                .add(egui::Button::new("Save As…").shortcut_text(save_as_shortcut))
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked()
             {
@@ -78,7 +83,7 @@ pub(crate) fn show(
 
             ui.separator();
             if ui
-                .button("Assemble Binary...")
+                .button("Assemble Binary…")
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked()
             {
@@ -111,11 +116,6 @@ pub(crate) fn show(
         ui.menu_button("View", |ui| {
             ui.checkbox(&mut app.workspace.show_location_counter, "Location Counter");
             ui.checkbox(&mut app.show_memory_viewer, "Memory Viewer");
-            ui.separator();
-            if ui.button("Keyboard Shortcuts…").clicked() {
-                app.show_shortcuts = true;
-                ui.close();
-            }
         })
         .response
         .on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -151,7 +151,7 @@ pub(crate) fn show(
                         }
                         drop(dev_ref);
                         if ui
-                            .small_button("🗑")
+                            .small_button("Remove")
                             .on_hover_text(format!("Remove {name}"))
                             .clicked()
                         {
@@ -230,7 +230,7 @@ pub(crate) fn show(
     // Toolbar
     ui.horizontal_wrapped(|ui| {
         if ui
-            .button("⟳ Assemble & Reset")
+            .button("Assemble & Reset")
             .on_hover_text(
                 "Assemble the active source, reset the CPU and load the program at 0x0000",
             )
@@ -245,7 +245,7 @@ pub(crate) fn show(
 
         let asset_ok = app.workspace.program_loaded || app.session.is_running();
         let step_resp = ui
-            .add_enabled(asset_ok, egui::Button::new("⏭ Step"))
+            .add_enabled(asset_ok, egui::Button::new("Step"))
             .on_hover_text(if asset_ok {
                 "Execute one instruction (F8)"
             } else {
@@ -257,14 +257,14 @@ pub(crate) fn show(
         }
 
         let halted = app.session.snapshot().halted;
-        let run_label = if app.session.is_running() {
-            "⏸ Stop"
-        } else if halted {
-            "▶ Resume"
+        let run_label = if halted {
+            "Resume"
+        } else if app.session.is_running() {
+            "Stop"
         } else if app.session.snapshot().pc > 0 {
-            "▶ Continue"
+            "Continue"
         } else {
-            "▶ Run"
+            "Run"
         };
         let run_resp = ui
             .add_enabled(asset_ok, egui::Button::new(run_label))
@@ -281,7 +281,7 @@ pub(crate) fn show(
         ui.separator();
 
         if ui
-            .button("⚡ INT")
+            .button("INT")
             .on_hover_text("Raise a maskable interrupt")
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .clicked()
@@ -297,7 +297,7 @@ pub(crate) fn show(
         }
 
         if ui
-            .button("⚡ NMI")
+            .button("NMI")
             .on_hover_text("Raise a non-maskable interrupt")
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .clicked()
@@ -328,10 +328,6 @@ pub(crate) fn show(
                     .monospace()
                     .color(app.theme.warning),
             );
-        }
-
-        if app.session.snapshot().halted && ui.button("Resume").clicked() {
-            app.resume_from_halt();
         }
     });
 

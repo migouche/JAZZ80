@@ -324,13 +324,13 @@ impl DeviceWithUi for VirtualDOS {
                 ui.monospace(this.gui_cwd.to_string());
                 #[cfg(target_arch = "wasm32")]
                 {
-                    if ui.button("Upload file...").clicked() {
+                    if ui.button("Upload file…").clicked() {
                         this.show_upload_menu = true;
                     }
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    if ui.button("Upload file...").clicked() {
+                    if ui.button("Upload file…").clicked() {
                         upload_requested = true;
                     }
                 }
@@ -363,7 +363,7 @@ impl DeviceWithUi for VirtualDOS {
             });
             #[cfg(target_arch = "wasm32")]
             if this.upload_receiver.is_some() {
-                ui.label("Waiting for file...");
+                ui.label("Waiting for file…");
             }
         });
         if upload_requested {
@@ -390,7 +390,7 @@ impl DeviceWithUi for VirtualDOS {
                     }
 
                     ui.separator();
-                    if ui.button("Upload from computer...").clicked() {
+                    if ui.button("Upload from computer…").clicked() {
                         self.show_upload_menu = false;
                         self.upload_file();
                     }
