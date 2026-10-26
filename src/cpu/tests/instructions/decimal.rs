@@ -108,10 +108,10 @@ fn test_daa_instruction(
     let result_a = cpu.get_register(GPR::A);
 
     assert_eq!(
-        cpu.test_callback.0.iter().rev().collect::<Vec<_>>(),
-        ["decode_unprefixed", "DAA"],
+        &cpu.trace.entries,
+        &["decode_unprefixed", "DAA"],
         "Instruction execution trace mismatch, got: {:?}",
-        cpu.test_callback.0.iter().rev().collect::<Vec<_>>()
+        cpu.trace.entries,
     );
 
     assert_eq!(

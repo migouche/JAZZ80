@@ -5,9 +5,6 @@ pub mod alu;
 mod block_instructions;
 mod enum_table;
 
-#[cfg(test)]
-use std::collections::VecDeque;
-
 use std::sync::{Arc, Mutex};
 
 use crate::{
@@ -25,13 +22,13 @@ use self::enum_table::table_enum;
 #[cfg(test)]
 macro_rules! test_log {
     ($self:expr, $fmt:expr $(, $($arg:tt)+)? ) => {
-        $self.test_callback.1(&format!($fmt $(, $($arg)+)?), &mut $self.test_callback.0)
+        $self.trace.record(format!($fmt $(, $($arg)+)?))
     };
 }
 
 #[cfg(not(test))]
 macro_rules! test_log {
-    ($self:expr, $fmt:expr $(, $($arg:tt)+)? ) => {
+    ($($tt:tt)*) => {
         ()
     };
 }
@@ -310,6 +307,20 @@ pub(super) fn decode_opcode(opcode: u8) -> OpcodeParts {
     OpcodeParts { x, y, z, p, q }
 }
 
+/// Test-only decode trace, in chronological order.
+#[cfg(test)]
+#[derive(Default)]
+struct TraceLog {
+    entries: Vec<String>,
+}
+
+#[cfg(test)]
+impl TraceLog {
+    fn record(&mut self, message: impl Into<String>) {
+        self.entries.push(message.into());
+    }
+}
+
 pub struct Z80A {
     // registers
     af_registers: [AFSet; 2],
@@ -339,10 +350,7 @@ pub struct Z80A {
     pub(super) iff_delay_count: u8,
 
     #[cfg(test)]
-    test_callback: (
-        VecDeque<String>,
-        Box<dyn FnMut(&str, &mut VecDeque<String>) + Send>,
-    ),
+    trace: TraceLog,
 }
 
 impl Z80A {
@@ -422,10 +430,7 @@ impl Z80A {
             iff_delay_count: 0,
 
             #[cfg(test)]
-            test_callback: (
-                VecDeque::new(),
-                Box::new(|s, q| q.push_front(s.to_string())),
-            ),
+            trace: TraceLog::default(),
         }
     }
 
