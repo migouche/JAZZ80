@@ -10,7 +10,7 @@ pub fn highlight(
     highlight_line: Option<usize>,
 ) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
-    let font_id = egui::FontId::monospace(AppTheme::MONO_FONT_SIZE); // Standard mono size
+    let font_id = egui::FontId::monospace(AppTheme::MONO_FONT_SIZE);
 
     // Split on '\n' (not `str::lines`) so the produced galley reproduces the
     // buffer byte-for-byte. `lines()` drops a trailing newline and the previous
@@ -22,7 +22,7 @@ pub fn highlight(
         let line = *line;
         let current_line_num = line_idx + 1;
         let background = if highlight_line == Some(current_line_num) {
-            theme.pc_row // One Dark current-row tint
+            theme.pc_row
         } else {
             egui::Color32::TRANSPARENT
         };
@@ -306,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_reuses_the_galley_when_nothing_changed() {
+    fn cache_reuses_the_tokens_when_nothing_changed() {
         let theme = AppTheme::ONE_DARK;
         let mut cache = HighlightCache::default();
 

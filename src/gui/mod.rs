@@ -315,25 +315,6 @@ START:
         })
         .collect()
     }
-    /*
-        fn line_to_str(&self, line: &str, i: usize) -> String {
-            let mut clean = line.split(';').next().unwrap_or("").trim();
-
-            if let Some(idx) = clean.find(':') {
-                clean = &clean[idx + 1..].trim();
-            }
-            let upper = clean.to_uppercase();
-
-            let emits_code = !clean.is_empty() && !upper.starts_with("ORG") && !upper.starts_with("EQU");
-            let mut addr_str = "    ".to_string(); // padding, gotta figure out a better way
-            if emits_code{
-                if let Some(&addr) = self.workspace.line_to_address.get(&i){
-                    addr_str = format!("{:04X} ", addr);
-                }
-            }
-            addr_str
-        }
-    */
     fn check_shortcuts(&self, ctx: &egui::Context) -> Option<HeaderAction> {
         let mut action = None;
         let mut binds = Self::keybinds();
