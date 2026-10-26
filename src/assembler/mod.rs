@@ -7,6 +7,7 @@ use crate::cpu::{ALUOperation, Condition, RegOps, Rp2Ops, RpOps};
 mod encoding;
 pub mod keywords;
 mod lexer;
+mod listing;
 mod parser;
 mod statement;
 
@@ -57,6 +58,8 @@ pub struct Symbol {
 pub struct AssemblyLine {
     pub address: u16,
     pub bytes: Vec<u8>,
+    /// Pre-formatted text for the listing's Data column.
+    pub data_column: String,
 }
 
 #[derive(Debug, Clone)]

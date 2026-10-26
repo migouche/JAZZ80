@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use super::listing::data_column;
 use super::{
     AssemblyLine, AssemblyResult, Operand, Symbol, SymbolType, Token, parse_instruction,
     parse_operands, qualify_label, qualify_local_tokens, resolve_immediate, tokenize,
@@ -390,6 +391,7 @@ fn emit_assembly(analysis: Analysis) -> Result<AssemblyResult, String> {
             AssemblyLine {
                 address: source_line.address,
                 bytes: bytes.clone(),
+                data_column: data_column(tokens, &bytes),
             },
         );
 

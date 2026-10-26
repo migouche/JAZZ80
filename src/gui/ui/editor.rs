@@ -273,9 +273,6 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
                 if app.workspace.show_location_counter {
                     ui.add_space(AppTheme::COLUMN_GAP);
 
-                    // Extract lines once so we can parse their content
-                    let lines: Vec<&str> = current_tab.code.lines().collect();
-
                     // Address Column
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
@@ -335,103 +332,13 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
                         };
 
                         for i in 1..=num_lines {
-                            let line_text = lines.get(i - 1).unwrap_or(&"");
-
-                            // Parse again for the Data column
-                            let mut clean = line_text.split(';').next().unwrap_or("").trim();
-                            if let Some(idx) = clean.find(':') {
-                                clean = clean[idx + 1..].trim();
-                            }
-                            let upper = clean.to_uppercase();
-
-                            let emits_code = !clean.is_empty()
-                                && !upper.starts_with("ORG ")
-                                && !upper.starts_with("EQU ")
-                                && !upper.contains(" EQU ");
-
-                            let mut data_str = "".to_string();
-
-                            if emits_code && let Some(line) = app.workspace.assembly_lines.get(&i) {
-                                let bytes = line.bytes.iter().take(8).copied().collect::<Vec<_>>();
-
-                                // 3. String formatting based on text structure
-                                if !bytes.is_empty() {
-                                    if upper.starts_with("DB ") || upper.starts_with("DEFB ") {
-                                        data_str = bytes
-                                            .iter()
-                                            .map(|b| format!("{:02X}", b))
-                                            .collect::<Vec<_>>()
-                                            .join(", ");
-                                    } else if upper.starts_with("DW ") || upper.starts_with("DEFW ")
-                                    {
-                                        let mut words = Vec::new();
-                                        for chunk in bytes.chunks(2) {
-                                            if chunk.len() == 2 {
-                                                words.push(format!(
-                                                    "{:02X}{:02X}",
-                                                    chunk[1], chunk[0]
-                                                )); // Little-endian format for display
-                                            } else {
-                                                words.push(format!("{:02X}", chunk[0]));
-                                            }
-                                        }
-                                        data_str = words.join(", ");
-                                    } else {
-                                        let mut op_len = 1;
-                                        if bytes.len() > 1
-                                            && (bytes[0] == 0xCB
-                                                || bytes[0] == 0xDD
-                                                || bytes[0] == 0xED
-                                                || bytes[0] == 0xFD)
-                                        {
-                                            op_len = 2; // Keep prefixes glued to the main Opcode
-                                        }
-                                        let op_hex = bytes[0..op_len]
-                                            .iter()
-                                            .map(|b| format!("{:02X}", b))
-                                            .collect::<Vec<_>>()
-                                            .join("");
-
-                                        if bytes.len() <= op_len {
-                                            data_str = op_hex;
-                                        } else {
-                                            let arg_hex = bytes[op_len..]
-                                                .iter()
-                                                .map(|b| format!("{:02X}", b))
-                                                .collect::<Vec<_>>()
-                                                .join(" ");
-                                            let has_comma = clean.contains(',');
-                                            let has_parens =
-                                                clean.contains('(') && clean.contains(')');
-
-                                            // Adapt the Data String punctuation based on the instruction
-                                            if has_comma && has_parens {
-                                                let comma_pos =
-                                                    clean.find(',').unwrap_or(usize::MAX);
-                                                let paren_pos =
-                                                    clean.find('(').unwrap_or(usize::MAX);
-                                                if paren_pos < comma_pos {
-                                                    data_str = format!("{} ({})", op_hex, arg_hex); // i.e. LD (nn), A
-                                                } else {
-                                                    data_str = format!("{}, ({})", op_hex, arg_hex); // i.e. LD A, (nn)
-                                                }
-                                            } else if has_comma {
-                                                data_str = format!("{}, {}", op_hex, arg_hex);
-                                            } else if has_parens {
-                                                data_str = format!("{} ({})", op_hex, arg_hex);
-                                            } else {
-                                                data_str = format!("{} {}", op_hex, arg_hex);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Pad output heavily so multi-byte values (e.g. DD21, 34 12) have a fixed column space
-                            let formatted_str = format!("{: <14}", data_str);
-
+                            let data = app
+                                .workspace
+                                .assembly_lines
+                                .get(&i)
+                                .map_or("", |line| line.data_column.as_str());
                             let label = egui::Label::new(
-                                egui::RichText::new(formatted_str)
+                                egui::RichText::new(format!("{data: <14}"))
                                     .font(font_id.clone())
                                     .color(data_color),
                             );

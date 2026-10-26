@@ -2,6 +2,7 @@ use crate::assembler::{
     Operand, Token, assemble_binary, assemble_with_metadata, parse_operands, tokenize,
 };
 
+mod data_column;
 mod ddcb_fdcb;
 mod ds_test;
 mod scripts;
