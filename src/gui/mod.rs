@@ -336,8 +336,14 @@ START:
     */
     fn check_shortcuts(&self, ctx: &egui::Context) -> Option<HeaderAction> {
         let mut action = None;
+        let mut binds = Self::keybinds();
+        // `consume_key` ignores extra Shift/Alt, so the most specific binding
+        // must be offered first or it is shadowed by the plainer one.
+        binds.sort_by_key(|(modifiers, _, _)| {
+            std::cmp::Reverse(u8::from(modifiers.shift) + u8::from(modifiers.alt))
+        });
         ctx.input_mut(|i| {
-            for (modifiers, key, act) in Self::keybinds() {
+            for (modifiers, key, act) in binds {
                 if i.consume_key(modifiers, key) {
                     action = Some(act);
                     break;
@@ -1388,5 +1394,46 @@ mod workspace_load_tests {
 
         assert_eq!(app.workspace.tabs.len(), 2);
         assert_eq!(app.workspace.active_tab, 0);
+    }
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+
+    fn press(ctx: &egui::Context, modifiers: egui::Modifiers, key: egui::Key) {
+        ctx.input_mut(|input| {
+            input.events.push(egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            });
+        });
+    }
+
+    #[test]
+    fn save_as_shortcut_is_not_shadowed_by_save() {
+        let ctx = egui::Context::default();
+        press(
+            &ctx,
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            egui::Key::S,
+        );
+        assert!(matches!(
+            Z80App::default().check_shortcuts(&ctx),
+            Some(HeaderAction::SaveFileAs)
+        ));
+    }
+
+    #[test]
+    fn save_shortcut_still_saves() {
+        let ctx = egui::Context::default();
+        press(&ctx, egui::Modifiers::COMMAND, egui::Key::S);
+        assert!(matches!(
+            Z80App::default().check_shortcuts(&ctx),
+            Some(HeaderAction::SaveFile)
+        ));
     }
 }

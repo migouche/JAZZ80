@@ -16,11 +16,9 @@ pub(crate) fn show_shortcuts(app: &mut Z80App, ctx: &egui::Context) {
                     .spacing([24.0, 6.0])
                     .striped(true)
                     .show(ui, |ui| {
-                        for (modifiers, key, action) in Z80App::keybinds() {
+                        for (_, _, action) in Z80App::keybinds() {
                             ui.label(action.label());
-                            ui.monospace(
-                                ctx.format_shortcut(&egui::KeyboardShortcut::new(modifiers, key)),
-                            );
+                            ui.monospace(action.shortcut_text(ctx));
                             ui.end_row();
                         }
                         ui.label("Toggle breakpoint");

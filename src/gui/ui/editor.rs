@@ -113,7 +113,10 @@ fn show_tab_bar(app: &mut Z80App, ui: &mut egui::Ui) -> Option<HeaderAction> {
 
                     if ui
                         .button("+")
-                        .on_hover_text("New file (Ctrl+N)")
+                        .on_hover_text(format!(
+                            "New file ({})",
+                            HeaderAction::NewFile.shortcut_text(ui.ctx())
+                        ))
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .clicked()
                     {
