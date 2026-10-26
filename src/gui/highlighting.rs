@@ -173,9 +173,51 @@ pub fn highlight(
     job
 }
 
+/// The laid-out galley for one source buffer.
+///
+/// `TextEdit` runs its layouter every frame; rebuilding the token layout when
+/// neither the text nor the highlighted line changed is wasted work. The cache
+/// is keyed by the exact text and line, so a stale galley can never be
+/// returned.
+#[derive(Default)]
+pub struct HighlightCache {
+    code: String,
+    highlight_line: Option<usize>,
+    galley: Option<std::sync::Arc<egui::Galley>>,
+    #[cfg(test)]
+    builds: usize,
+}
+
+impl HighlightCache {
+    pub fn galley(
+        &mut self,
+        ui: &egui::Ui,
+        theme: &AppTheme,
+        code: &str,
+        highlight_line: Option<usize>,
+    ) -> std::sync::Arc<egui::Galley> {
+        let stale =
+            self.galley.is_none() || self.code != code || self.highlight_line != highlight_line;
+        if stale {
+            self.galley = Some(
+                ui.painter()
+                    .layout_job(highlight(theme, code, highlight_line)),
+            );
+            self.code.clear();
+            self.code.push_str(code);
+            self.highlight_line = highlight_line;
+            #[cfg(test)]
+            {
+                self.builds += 1;
+            }
+        }
+        std::sync::Arc::clone(self.galley.as_ref().expect("populated above"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AppTheme, highlight};
+    use super::{AppTheme, HighlightCache, highlight};
     use eframe::egui;
 
     fn section_text<'a>(
@@ -249,5 +291,77 @@ mod tests {
             .find(|s| section_text(&job, s).contains("NOP"))
             .expect("NOP section");
         assert_eq!(nop.format.background, egui::Color32::TRANSPARENT);
+    }
+
+    fn run_frame<R>(ctx: &egui::Context, f: impl FnOnce(&egui::Ui) -> R) -> R {
+        let mut result = None;
+        let mut f = Some(f);
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let f = f.take().expect("one frame");
+            egui::CentralPanel::default().show(ui, |ui| {
+                result = Some(f(ui));
+            });
+        });
+        output.drop_without_applying_deltas();
+        result.expect("the closure ran")
+    }
+
+    #[test]
+    fn cache_reuses_the_galley_when_nothing_changed() {
+        let theme = AppTheme::ONE_DARK;
+        let mut cache = HighlightCache::default();
+
+        let (first, second) = run_frame(&egui::Context::default(), |ui| {
+            let first = cache.galley(ui, &theme, "LD A, 1", None);
+            let second = cache.galley(ui, &theme, "LD A, 1", None);
+            (first, second)
+        });
+
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert_eq!(cache.builds, 1);
+    }
+
+    #[test]
+    fn cache_rebuilds_when_the_code_changes() {
+        let theme = AppTheme::ONE_DARK;
+        let mut cache = HighlightCache::default();
+
+        let (first, second) = run_frame(&egui::Context::default(), |ui| {
+            let first = cache.galley(ui, &theme, "LD A, 1", None);
+            let second = cache.galley(ui, &theme, "LD A, 2", None);
+            (first, second)
+        });
+
+        assert_eq!(cache.builds, 2);
+        assert!(!std::sync::Arc::ptr_eq(&first, &second));
+        assert_eq!(second.text(), "LD A, 2");
+    }
+
+    #[test]
+    fn cache_rebuilds_when_the_highlighted_line_changes() {
+        let theme = AppTheme::ONE_DARK;
+        let mut cache = HighlightCache::default();
+
+        let (first, second) = run_frame(&egui::Context::default(), |ui| {
+            let first = cache.galley(ui, &theme, "LD A, 1", None);
+            let second = cache.galley(ui, &theme, "LD A, 1", Some(1));
+            (first, second)
+        });
+
+        assert_eq!(cache.builds, 2);
+        assert!(!std::sync::Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn cache_survives_across_frames() {
+        let theme = AppTheme::ONE_DARK;
+        let ctx = egui::Context::default();
+        let mut cache = HighlightCache::default();
+
+        let first = run_frame(&ctx, |ui| cache.galley(ui, &theme, "LD A, 1", None));
+        let second = run_frame(&ctx, |ui| cache.galley(ui, &theme, "LD A, 1", None));
+
+        assert_eq!(cache.builds, 1);
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
     }
 }

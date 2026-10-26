@@ -1,7 +1,7 @@
 use eframe::egui::{self, TextBuffer};
 
 use super::super::theme::AppTheme;
-use super::super::{EditorTabKind, HeaderAction, Z80App, highlighting};
+use super::super::{EditorTabKind, HeaderAction, Z80App};
 
 pub(crate) fn show(app: &mut Z80App, ui: &mut egui::Ui) -> Option<HeaderAction> {
     let action = show_tab_bar(app, ui);
@@ -452,12 +452,11 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
                             .color(app.theme.muted),
                     );
 
-                    let theme = &app.theme;
+                    let theme = app.theme;
+                    let cache = &mut app.highlight_cache;
                     let mut layouter =
                         |ui: &egui::Ui, string: &dyn TextBuffer, _wrap_width: f32| {
-                            let layout_job =
-                                highlighting::highlight(theme, string.as_str(), highlight_line);
-                            ui.painter().layout_job(layout_job)
+                            cache.galley(ui, &theme, string.as_str(), highlight_line)
                         };
 
                     let is_binary_tab = current_tab.kind == EditorTabKind::Binary;

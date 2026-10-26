@@ -88,6 +88,8 @@ pub struct Z80App {
 
     theme: theme::AppTheme,
 
+    highlight_cache: highlighting::HighlightCache,
+
     files: FileService,
 
     #[cfg(target_arch = "wasm32")]
@@ -992,6 +994,7 @@ impl Default for Z80App {
             attached_devices: Vec::new(),
             attached_device_specs: Vec::new(),
             theme: theme::AppTheme::ONE_DARK,
+            highlight_cache: highlighting::HighlightCache::default(),
             files: FileService::default(),
             #[cfg(target_arch = "wasm32")]
             examples_list: Vec::new(),
