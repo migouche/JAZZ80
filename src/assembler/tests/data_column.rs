@@ -104,3 +104,13 @@ fn comment_only_line_has_no_assembly_entry() {
 fn tab_separated_directive_is_classified_by_token() {
     assert_eq!(line("DB\t1, 2", 1), "01, 02");
 }
+
+#[test]
+fn string_containing_equ_is_not_blanked_by_text_heuristic() {
+    assert_eq!(line("DB \" EQU \"", 1), "20, 45, 51, 55, 20");
+}
+
+#[test]
+fn directive_without_separating_whitespace_is_classified_by_token() {
+    assert_eq!(line("DB\"AB\"", 1), "41, 42");
+}
