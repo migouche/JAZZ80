@@ -4,7 +4,7 @@ use eframe::egui;
 
 use super::super::{
     SymbolDisplayFormat, Z80App, flag_description, format_constant_value, gpr_index, parse_hex_u8,
-    parse_hex_u16, snapshot_flag,
+    parse_hex_u16, snapshot_flag, theme::AppTheme,
 };
 
 pub(crate) fn show_registers(app: &mut Z80App, ui: &mut egui::Ui) {
@@ -214,7 +214,7 @@ pub(crate) fn show_registers(app: &mut Z80App, ui: &mut egui::Ui) {
             let text = egui::RichText::new(label).strong().color(text_color);
             let frame_resp = egui::Frame::new()
                 .fill(fill)
-                .corner_radius(4.0)
+                .corner_radius(AppTheme::WIDGET_CORNER_RADIUS)
                 .inner_margin(4.0)
                 .show(ui, |ui| {
                     ui.label(text);

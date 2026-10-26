@@ -1,5 +1,6 @@
 use eframe::egui::{self, TextBuffer};
 
+use super::super::theme::AppTheme;
 use super::super::{EditorTabKind, HeaderAction, Z80App, highlighting};
 
 pub(crate) fn show(app: &mut Z80App, ui: &mut egui::Ui) -> Option<HeaderAction> {
@@ -45,10 +46,13 @@ fn show_tab_bar(app: &mut Z80App, ui: &mut egui::Ui) -> Option<HeaderAction> {
 
                         let resp = egui::Frame::new()
                             .fill(bg_color)
-                            .inner_margin(egui::Margin::symmetric(8, 4))
+                            .inner_margin(egui::Margin::symmetric(
+                                AppTheme::TAB_MARGIN_X,
+                                AppTheme::TAB_MARGIN_Y,
+                            ))
                             .corner_radius(egui::CornerRadius {
-                                nw: 5,
-                                ne: 5,
+                                nw: AppTheme::TAB_CORNER_RADIUS,
+                                ne: AppTheme::TAB_CORNER_RADIUS,
                                 ..Default::default()
                             })
                             .stroke(egui::Stroke::new(
@@ -72,16 +76,22 @@ fn show_tab_bar(app: &mut Z80App, ui: &mut egui::Ui) -> Option<HeaderAction> {
 
                                     if tab.is_dirty {
                                         ui.add(
-                                            egui::Label::new(egui::RichText::new("●").size(10.0))
-                                                .sense(egui::Sense::hover()),
+                                            egui::Label::new(
+                                                egui::RichText::new("●")
+                                                    .size(AppTheme::DIRTY_DOT_FONT_SIZE),
+                                            )
+                                            .sense(egui::Sense::hover()),
                                         );
                                     }
 
                                     // Close button (x)
                                     if ui
                                         .add(
-                                            egui::Button::new(egui::RichText::new("×").size(14.0))
-                                                .frame(false),
+                                            egui::Button::new(
+                                                egui::RichText::new("×")
+                                                    .size(AppTheme::TAB_CLOSE_FONT_SIZE),
+                                            )
+                                            .frame(false),
                                         )
                                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                                         .clicked()
@@ -198,7 +208,7 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
                         }
                 };
 
-                let font_id = egui::FontId::monospace(14.0);
+                let font_id = egui::FontId::monospace(AppTheme::MONO_FONT_SIZE);
 
                 // 1. Line numbers column
                 ui.vertical(|ui| {
@@ -223,7 +233,7 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
                             egui::Color32::TRANSPARENT
                         };
                         let text_color = if is_bp {
-                            egui::Color32::WHITE
+                            app.theme.breakpoint_text
                         } else if is_pc {
                             app.theme.pc_marker
                         } else {
@@ -261,7 +271,7 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
 
                 // 2. Location Counter Columns
                 if app.workspace.show_location_counter {
-                    ui.add_space(4.0);
+                    ui.add_space(AppTheme::COLUMN_GAP);
 
                     // Extract lines once so we can parse their content
                     let lines: Vec<&str> = current_tab.code.lines().collect();
@@ -306,7 +316,7 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
                         }
                     });
 
-                    ui.add_space(4.0);
+                    ui.add_space(AppTheme::COLUMN_GAP);
 
                     // Data Column
                     ui.vertical(|ui| {
@@ -429,7 +439,7 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
                         }
                     });
 
-                    ui.add_space(4.0);
+                    ui.add_space(AppTheme::COLUMN_GAP);
                 }
                 // 3. Code Editor Column
                 ui.vertical(|ui| {
@@ -442,15 +452,11 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
                             .color(app.theme.muted),
                     );
 
-                    let theme = &app.code_theme;
+                    let theme = &app.theme;
                     let mut layouter =
                         |ui: &egui::Ui, string: &dyn TextBuffer, _wrap_width: f32| {
-                            let layout_job = highlighting::highlight(
-                                ui.ctx(),
-                                theme,
-                                string.as_str(),
-                                highlight_line,
-                            );
+                            let layout_job =
+                                highlighting::highlight(theme, string.as_str(), highlight_line);
                             ui.painter().layout_job(layout_job)
                         };
 
@@ -459,7 +465,7 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
                     // Long lines are reachable via a horizontal scrollbar
                     // instead of wrapping: wrapping would add visual rows
                     // and desynchronise the line-number/address gutters.
-                    let font_id = egui::FontId::monospace(14.0);
+                    let font_id = egui::FontId::monospace(AppTheme::MONO_FONT_SIZE);
                     let longest = current_tab
                         .code
                         .split('\n')
@@ -487,7 +493,10 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
                                         .font(egui::TextStyle::Monospace)
                                         .layouter(&mut layouter)
                                         .code_editor()
-                                        .margin(egui::Margin::symmetric(4, 0))
+                                        .margin(egui::Margin::symmetric(
+                                            AppTheme::EDITOR_MARGIN_X,
+                                            0,
+                                        ))
                                         .desired_width(desired_width)
                                         .desired_rows(25)
                                         .lock_focus(true)
@@ -497,7 +506,10 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
                                         .font(egui::TextStyle::Monospace)
                                         .layouter(&mut layouter)
                                         .code_editor()
-                                        .margin(egui::Margin::symmetric(4, 0))
+                                        .margin(egui::Margin::symmetric(
+                                            AppTheme::EDITOR_MARGIN_X,
+                                            0,
+                                        ))
                                         .desired_width(desired_width)
                                         .desired_rows(25)
                                         .lock_focus(true)

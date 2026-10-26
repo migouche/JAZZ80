@@ -2,48 +2,15 @@ use eframe::egui;
 
 use crate::assembler::keywords::{CONDITIONS, DIRECTIVES, MNEMONICS, REGISTERS};
 
-pub struct CodeTheme {
-    pub comment: egui::Color32,
-    pub mnemonic: egui::Color32,
-    pub register: egui::Color32,
-    pub condition: egui::Color32,
-    pub number: egui::Color32,
-    pub label: egui::Color32,
-    pub directive: egui::Color32,
-    pub string: egui::Color32,
-    pub plain: egui::Color32,
-}
-
-impl Default for CodeTheme {
-    fn default() -> Self {
-        Self::one_dark_pro_vivid()
-    }
-}
-
-impl CodeTheme {
-    pub fn one_dark_pro_vivid() -> Self {
-        Self {
-            comment: egui::Color32::from_rgb(127, 132, 142), // #7f848e (Grey)
-            mnemonic: egui::Color32::from_rgb(198, 120, 221), // #c678dd (Purple)
-            register: egui::Color32::from_rgb(229, 192, 123), // #e5c07b (Gold/Yellow)
-            condition: egui::Color32::from_rgb(224, 108, 117), // #e06c75 (Red/Pink)
-            number: egui::Color32::from_rgb(209, 154, 102),  // #d19a66 (Orange)
-            label: egui::Color32::from_rgb(97, 175, 239),    // #61afef (Blue)
-            directive: egui::Color32::from_rgb(86, 182, 194), // #56b6c2 (Cyan)
-            string: egui::Color32::from_rgb(152, 195, 121),  // #98c379 (Green)
-            plain: egui::Color32::from_rgb(171, 178, 191),   // #abb2bf (White-ish)
-        }
-    }
-}
+use super::theme::AppTheme;
 
 pub fn highlight(
-    _ctx: &egui::Context,
-    theme: &CodeTheme,
+    theme: &AppTheme,
     code: &str,
     highlight_line: Option<usize>,
 ) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
-    let font_id = egui::FontId::monospace(14.0); // Standard mono size
+    let font_id = egui::FontId::monospace(AppTheme::MONO_FONT_SIZE); // Standard mono size
 
     // Split on '\n' (not `str::lines`) so the produced galley reproduces the
     // buffer byte-for-byte. `lines()` drops a trailing newline and the previous
@@ -55,7 +22,7 @@ pub fn highlight(
         let line = *line;
         let current_line_num = line_idx + 1;
         let background = if highlight_line == Some(current_line_num) {
-            egui::Color32::from_rgb(0x3a, 0x40, 0x4b) // One Dark current-row tint
+            theme.pc_row // One Dark current-row tint
         } else {
             egui::Color32::TRANSPARENT
         };
@@ -80,17 +47,17 @@ pub fn highlight(
             let clean = upper.trim_end_matches(',');
 
             if DIRECTIVES.contains(&clean) {
-                theme.directive
+                theme.syntax.directive
             } else if MNEMONICS.contains(&clean) {
-                theme.mnemonic
+                theme.syntax.mnemonic
             } else if REGISTERS.contains(&clean) {
-                theme.register
+                theme.syntax.register
             } else if CONDITIONS.contains(&clean) {
-                theme.condition
+                theme.syntax.condition
             } else if clean.ends_with(':') {
-                theme.label
+                theme.syntax.label
             } else if clean.starts_with('"') || clean.starts_with('\'') {
-                theme.string
+                theme.syntax.string
             } else {
                 // Check if number
                 if clean.chars().next().is_some_and(|c| c.is_ascii_digit())
@@ -98,10 +65,10 @@ pub fn highlight(
                     || (clean.ends_with('H')
                         && clean.chars().next().is_some_and(|c| c.is_ascii_hexdigit()))
                 {
-                    theme.number
+                    theme.syntax.number
                 } else {
                     // Fallback: Assume any other identifier is a label reference
-                    theme.label
+                    theme.syntax.label
                 }
             }
         };
@@ -150,7 +117,7 @@ pub fn highlight(
                     0.0,
                     egui::TextFormat {
                         font_id: font_id.clone(),
-                        color: theme.plain, // Delimiters are plain
+                        color: theme.syntax.plain, // Delimiters are plain
                         background,
                         ..Default::default()
                     },
@@ -183,7 +150,7 @@ pub fn highlight(
                 0.0,
                 egui::TextFormat {
                     font_id: font_id.clone(),
-                    color: theme.comment,
+                    color: theme.syntax.comment,
                     background,
                     ..Default::default()
                 },
@@ -204,4 +171,83 @@ pub fn highlight(
     }
 
     job
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppTheme, highlight};
+    use eframe::egui;
+
+    fn section_text<'a>(
+        job: &'a egui::text::LayoutJob,
+        section: &egui::text::LayoutSection,
+    ) -> &'a str {
+        &job.text[section.byte_range.start.0..section.byte_range.end.0]
+    }
+
+    fn section_with_text<'a>(
+        job: &'a egui::text::LayoutJob,
+        text: &str,
+    ) -> &'a egui::text::LayoutSection {
+        job.sections
+            .iter()
+            .find(|s| section_text(job, s) == text)
+            .unwrap_or_else(|| panic!("no section with text {text:?}"))
+    }
+
+    #[test]
+    fn highlight_preserves_the_buffer_text() {
+        let theme = AppTheme::ONE_DARK;
+        for code in ["", "NOP", "NOP\n", "A\nB"] {
+            let job = highlight(&theme, code, None);
+            assert_eq!(job.text, code, "buffer text changed for {code:?}");
+        }
+    }
+
+    #[test]
+    fn highlight_colours_tokens_from_the_theme() {
+        let theme = AppTheme::ONE_DARK;
+        let job = highlight(&theme, "LD A, 1", None);
+
+        assert_eq!(
+            section_with_text(&job, "LD").format.color,
+            theme.syntax.mnemonic
+        );
+        assert_eq!(
+            section_with_text(&job, "A").format.color,
+            theme.syntax.register
+        );
+        assert_eq!(
+            section_with_text(&job, "1").format.color,
+            theme.syntax.number
+        );
+
+        let job = highlight(&theme, "NOP ; note", None);
+        let comment = job
+            .sections
+            .iter()
+            .find(|s| section_text(&job, s) == "; note")
+            .expect("comment section");
+        assert_eq!(comment.format.color, theme.syntax.comment);
+    }
+
+    #[test]
+    fn highlight_tints_only_the_requested_line() {
+        let theme = AppTheme::ONE_DARK;
+        let job = highlight(&theme, "NOP\nHALT", Some(2));
+
+        let halted = job
+            .sections
+            .iter()
+            .find(|s| section_text(&job, s).contains("HALT"))
+            .expect("HALT section");
+        assert_eq!(halted.format.background, theme.pc_row);
+
+        let nop = job
+            .sections
+            .iter()
+            .find(|s| section_text(&job, s).contains("NOP"))
+            .expect("NOP section");
+        assert_eq!(nop.format.background, egui::Color32::TRANSPARENT);
+    }
 }

@@ -81,7 +81,6 @@ pub struct Z80App {
     status_message: Option<String>,
 
     pending_modal: Option<ModalType>,
-    code_theme: highlighting::CodeTheme,
 
     attached_devices: Vec<Arc<Mutex<dyn DeviceWithUi>>>,
 
@@ -990,7 +989,6 @@ impl Default for Z80App {
             last_error: None,
             status_message: None,
             pending_modal: None,
-            code_theme: highlighting::CodeTheme::one_dark_pro_vivid(),
             attached_devices: Vec::new(),
             attached_device_specs: Vec::new(),
             theme: theme::AppTheme::ONE_DARK,
