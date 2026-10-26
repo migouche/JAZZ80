@@ -30,6 +30,71 @@ fn snapshot_matches_cpu_state() {
     assert_eq!(snap.memory.len(), 0x10000);
 }
 
+#[test]
+fn consecutive_snapshots_keep_memory_contents() {
+    let mut machine = Machine::new();
+    machine.memory_mut().write(0x1234, 0xAB);
+    machine.memory_mut().write(0x1235, 0xCD);
+
+    let first = machine.snapshot();
+    let second = machine.snapshot();
+
+    assert_eq!(first.memory, second.memory);
+    assert_eq!(second.memory[0x1234], 0xAB);
+    assert_eq!(second.memory[0x1235], 0xCD);
+}
+
+#[test]
+fn snapshot_into_reuses_the_buffer_without_changing_contents() {
+    let mut machine = Machine::new();
+    for addr in 0..=u16::MAX {
+        machine.memory_mut().write(addr, (addr as u8) ^ 0x5A);
+    }
+
+    let mut snapshot = machine.snapshot();
+    let buffer = snapshot.memory.as_ptr();
+
+    for addr in 0..=u16::MAX {
+        machine
+            .memory_mut()
+            .write(addr, (addr as u8).wrapping_add(7));
+    }
+    machine.snapshot_into(&mut snapshot);
+
+    assert_eq!(snapshot.memory.as_ptr(), buffer);
+    for addr in 0..=u16::MAX {
+        assert_eq!(
+            snapshot.memory[addr as usize],
+            (addr as u8).wrapping_add(7),
+            "address {addr:#06X}"
+        );
+    }
+}
+
+#[test]
+fn snapshot_delta_only_reports_changed_bytes() {
+    let mut machine = Machine::new();
+    machine.memory_mut().write(0x1234, 0xAB);
+    machine.memory_mut().write(0x1235, 0xCD);
+
+    let delta = machine.snapshot_delta();
+
+    assert_eq!(delta.memory, vec![(0x1234, 0xAB), (0x1235, 0xCD)]);
+    assert!(machine.snapshot_delta().memory.is_empty());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn requeued_dirty_bytes_are_reported_again() {
+    let mut machine = Machine::new();
+    machine.memory_mut().write(0x1234, 0xAB);
+    let delta = machine.snapshot_delta();
+
+    machine.mark_dirty(delta.memory.into_iter().map(|(addr, _)| addr));
+
+    assert_eq!(machine.snapshot_delta().memory, vec![(0x1234, 0xAB)]);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn run_slice_zero_budget_executes_nothing() {
@@ -139,7 +204,7 @@ fn run_slice_wakes_halted_cpu_on_maskable_interrupt() {
         SliceResult::Halted { cycles: 2 }
     );
 
-    machine.cpu.set_interrupt(true);
+    machine.cpu.pulse_interrupt();
     let mut woke = false;
     for _ in 0..4 {
         let result = machine.run_slice(10, &breakpoints);

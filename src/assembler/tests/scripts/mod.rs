@@ -7,8 +7,6 @@ use crate::cpu::Z80A;
 use crate::traits::SynchronousComponent;
 use std::collections::HashMap;
 
-/// Helper function to assemble code, setup CPU, and run until halted.
-/// Returns the CPU instance and the symbol table from the assembler.
 fn run_until_halt(code: &str, max_cycles: usize) -> (Z80A, HashMap<String, Symbol>) {
     // Assemble
     let result = assemble_with_metadata(code).expect("Assembly failed");

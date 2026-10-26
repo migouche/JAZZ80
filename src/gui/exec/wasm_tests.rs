@@ -46,7 +46,7 @@ fn cooperative_delivers_snapshots_while_running() {
     while Instant::now() < deadline {
         for event in runner.poll() {
             if let Event::Snapshot(s) = &event {
-                if s.pc > 0 {
+                if s.state.pc > 0 {
                     saw_snapshot = true;
                 }
             }
@@ -85,7 +85,7 @@ fn cooperative_stop_and_commands() {
     let _ = runner.poll();
     let _ = runner.poll();
 
-    runner.send_command(Command::SetInterrupt(true));
+    runner.send_command(Command::PulseInterrupt);
     let machine = runner.take_machine();
     assert!(machine.cpu.is_halted());
 }

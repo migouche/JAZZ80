@@ -42,7 +42,7 @@ impl Runner for Cooperative {
         while let Some(command) = self.pending.pop_front() {
             match command {
                 Command::Nmi => machine.cpu.nmi(),
-                Command::SetInterrupt(v) => machine.cpu.set_interrupt(v),
+                Command::PulseInterrupt => machine.cpu.pulse_interrupt(),
                 Command::SetBreakpoints(bp) => self.breakpoints = bp,
                 Command::Resume => machine.cpu.set_halted(false),
                 Command::Tick => machine.cpu.tick(),
@@ -55,17 +55,17 @@ impl Runner for Cooperative {
                 let addr = machine.cpu.get_pc();
                 self.finished = Some(addr);
                 events.push(Event::Finished(addr));
-                events.push(Event::Snapshot(machine.snapshot()));
+                events.push(Event::Snapshot(machine.snapshot_delta()));
                 return events;
             }
             if cycles >= SLICE_TICKS {
-                events.push(Event::Snapshot(machine.snapshot()));
+                events.push(Event::Snapshot(machine.snapshot_delta()));
                 break;
             }
             machine.cpu.tick();
             cycles += 1;
             if machine.cpu.is_halted() {
-                events.push(Event::Snapshot(machine.snapshot()));
+                events.push(Event::Snapshot(machine.snapshot_delta()));
                 break;
             }
         }

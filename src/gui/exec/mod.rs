@@ -3,7 +3,7 @@ pub mod cooperative;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod threaded;
 
-use crate::emulator::{Machine, MachineSnapshot};
+use crate::emulator::{Machine, SnapshotDelta};
 use std::collections::HashSet;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
@@ -16,7 +16,7 @@ pub const SNAPSHOT_INTERVAL: Duration = Duration::from_millis(16);
 #[derive(Clone, Debug)]
 pub enum Command {
     Nmi,
-    SetInterrupt(bool),
+    PulseInterrupt,
     SetBreakpoints(HashSet<u16>),
     Resume,
     #[cfg(not(target_arch = "wasm32"))]
@@ -26,7 +26,7 @@ pub enum Command {
 
 #[derive(Debug)]
 pub enum Event {
-    Snapshot(MachineSnapshot),
+    Snapshot(SnapshotDelta),
     Finished(u16),
 }
 

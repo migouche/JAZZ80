@@ -38,55 +38,40 @@ impl Machine {
         }
     }
 
-    pub fn snapshot(&self) -> MachineSnapshot {
-        let mut regs = [0u8; 8];
-        for (i, gpr) in GPR_ORDER.iter().enumerate() {
-            regs[i] = self.cpu.get_register(*gpr);
-        }
-        let mut shadow_regs = [0u8; 8];
-        for (i, gpr) in GPR_ORDER.iter().enumerate() {
-            shadow_regs[i] = self.cpu.get_shadow_register(*gpr);
-        }
+    /// Convenience wrapper for callers that need a snapshot of their own.
+    /// Prefer [`Machine::snapshot_into`] on hot paths to reuse a buffer.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn snapshot(&mut self) -> MachineSnapshot {
+        let mut out = MachineSnapshot::default();
+        self.snapshot_into(&mut out);
+        out
+    }
 
-        // Only copy dirty memory addresses to avoid 64KB copy per snapshot
-        let mut memory = vec![0u8; 0x10000];
-        let dirty = self.cpu.memory.get_dirty();
-        if let Some(dirty) = &dirty {
-            for (addr, byte) in memory.iter_mut().enumerate() {
-                if dirty[addr] {
-                    *byte = self.cpu.memory.read(addr as u16);
-                }
-            }
-        } else {
-            for (addr, byte) in memory.iter_mut().enumerate() {
-                *byte = self.cpu.memory.read(addr as u16);
-            }
+    /// Writes the current machine state into `out`, reusing its memory buffer
+    /// so the steady-state snapshot path performs no allocation.
+    pub fn snapshot_into(&mut self, out: &mut MachineSnapshot) {
+        let _ = self.cpu.memory.take_dirty();
+        out.state_from(self);
+        for (addr, slot) in out.memory.iter_mut().enumerate() {
+            *slot = self.cpu.memory.read(addr as u16);
         }
-        // Clear dirty flags after snapshot
-        self.cpu.memory.clear_dirty();
+    }
 
-        MachineSnapshot {
-            pc: self.cpu.get_pc(),
-            sp: self.cpu.get_sp(),
-            ix: self.cpu.get_ix(),
-            iy: self.cpu.get_iy(),
-            regs,
-            shadow_regs,
-            iff1: self.cpu.get_iff1(),
-            iff2: self.cpu.get_iff2(),
-            interrupt_mode: self.cpu.get_interrupt_mode(),
-            halted: self.cpu.is_halted(),
-            flags: SnapshotFlags {
-                s: self.cpu.get_flag(Flag::S),
-                z: self.cpu.get_flag(Flag::Z),
-                y: self.cpu.get_flag(Flag::Y),
-                h: self.cpu.get_flag(Flag::H),
-                x: self.cpu.get_flag(Flag::X),
-                pv: self.cpu.get_flag(Flag::PV),
-                n: self.cpu.get_flag(Flag::N),
-                c: self.cpu.get_flag(Flag::C),
-            },
-            memory,
+    pub fn snapshot_delta(&mut self) -> SnapshotDelta {
+        let memory = self.cpu.memory.take_dirty().unwrap_or_else(|| {
+            (0..=u16::MAX)
+                .map(|addr| (addr, self.cpu.memory.read(addr)))
+                .collect()
+        });
+        let mut state = MachineSnapshot::default();
+        state.state_from(self);
+        SnapshotDelta { state, memory }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn mark_dirty(&mut self, addresses: impl IntoIterator<Item = u16>) {
+        for address in addresses {
+            self.cpu.memory.mark_dirty(address);
         }
     }
 }
@@ -133,7 +118,7 @@ pub struct MachineSnapshot {
     pub interrupt_mode: u8,
     pub halted: bool,
     pub flags: SnapshotFlags,
-    pub memory: Vec<u8>,
+    pub memory: Box<[u8; 0x10000]>,
 }
 
 impl Default for MachineSnapshot {
@@ -159,9 +144,43 @@ impl Default for MachineSnapshot {
                 n: false,
                 c: false,
             },
-            memory: vec![0u8; 0x10000],
+            memory: Box::new([0u8; 0x10000]),
         }
     }
+}
+
+impl MachineSnapshot {
+    /// Copies the scalar machine state into `self`, leaving `memory` untouched.
+    fn state_from(&mut self, machine: &Machine) {
+        self.pc = machine.cpu.get_pc();
+        self.sp = machine.cpu.get_sp();
+        self.ix = machine.cpu.get_ix();
+        self.iy = machine.cpu.get_iy();
+        for (i, gpr) in GPR_ORDER.iter().enumerate() {
+            self.regs[i] = machine.cpu.get_register(*gpr);
+            self.shadow_regs[i] = machine.cpu.get_shadow_register(*gpr);
+        }
+        self.iff1 = machine.cpu.get_iff1();
+        self.iff2 = machine.cpu.get_iff2();
+        self.interrupt_mode = machine.cpu.get_interrupt_mode();
+        self.halted = machine.cpu.is_halted();
+        self.flags = SnapshotFlags {
+            s: machine.cpu.get_flag(Flag::S),
+            z: machine.cpu.get_flag(Flag::Z),
+            y: machine.cpu.get_flag(Flag::Y),
+            h: machine.cpu.get_flag(Flag::H),
+            x: machine.cpu.get_flag(Flag::X),
+            pv: machine.cpu.get_flag(Flag::PV),
+            n: machine.cpu.get_flag(Flag::N),
+            c: machine.cpu.get_flag(Flag::C),
+        };
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SnapshotDelta {
+    pub state: MachineSnapshot,
+    pub memory: Vec<(u16, u8)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]

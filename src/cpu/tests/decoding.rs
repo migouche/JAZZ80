@@ -1353,17 +1353,17 @@ fn test_opcode(
 
     assert_eq!(
         expected_logs.len(),
-        cpu.test_callback.0.len(),
+        cpu.trace.entries.len(),
         "Log length mismatch, expected {} entries but got {} entries. Expected logs: {:?}, Actual logs: {:?}",
         expected_logs.len(),
-        cpu.test_callback.0.len(),
+        cpu.trace.entries.len(),
         expected_logs,
-        cpu.test_callback.0.iter().rev().collect::<Vec<_>>()
+        cpu.trace.entries,
     );
 
     // zip logs and cpu logs
 
-    for (expected, actual) in expected_logs.iter().zip(cpu.test_callback.0.iter().rev()) {
+    for (expected, actual) in expected_logs.iter().zip(&cpu.trace.entries) {
         assert_eq!(
             expected, actual,
             "Log mismatch. Expected log: {:?}, Actual log: {:?}",

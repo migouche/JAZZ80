@@ -2,6 +2,7 @@ use crate::assembler::{
     Operand, Token, assemble_binary, assemble_with_metadata, parse_operands, tokenize,
 };
 
+mod data_column;
 mod ddcb_fdcb;
 mod ds_test;
 mod scripts;
@@ -502,6 +503,12 @@ fn test_assembler_errors_logic() {
     }
     code.push_str("end: HALT");
     asm_err(&code);
+}
+
+#[test]
+fn duplicate_label_error_names_the_line_and_label() {
+    let error = assemble_with_metadata("DUP: NOP\nDUP: NOP").unwrap_err();
+    assert_eq!(error, "Line 2: Duplicate label 'DUP'");
 }
 
 #[test]

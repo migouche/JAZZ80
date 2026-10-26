@@ -17,11 +17,12 @@ pub trait MemoryMapper: Send {
         self.write(address.overflowing_add(1).0, (data >> 8) as u8);
     }
 
-    fn get_dirty(&self) -> Option<Vec<bool>> {
+    fn take_dirty(&mut self) -> Option<Vec<(u16, u8)>> {
         None
     }
 
-    fn clear_dirty(&self) {}
+    #[cfg(not(target_arch = "wasm32"))]
+    fn mark_dirty(&mut self, _address: u16) {}
 }
 
 pub trait IODevice: Send {

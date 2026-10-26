@@ -2,7 +2,9 @@ use crate::traits::SynchronousComponent;
 
 const DAA_OPCODE: u8 = 0x27;
 
-fn parse_line_to_test_case(line: &str) -> Option<(u8, bool, bool, bool, u8, bool, bool, bool)> {
+type ParsedDaCase = (u8, bool, bool, bool, u8, bool, bool, bool);
+
+fn parse_line_to_test_case(line: &str) -> Option<ParsedDaCase> {
     let mut parts = line.split_whitespace();
 
     if parts.next()? != "N" {
@@ -108,10 +110,10 @@ fn test_daa_instruction(
     let result_a = cpu.get_register(GPR::A);
 
     assert_eq!(
-        cpu.test_callback.0.iter().rev().collect::<Vec<_>>(),
-        ["decode_unprefixed", "DAA"],
+        &cpu.trace.entries,
+        &["decode_unprefixed", "DAA"],
         "Instruction execution trace mismatch, got: {:?}",
-        cpu.test_callback.0.iter().rev().collect::<Vec<_>>()
+        cpu.trace.entries,
     );
 
     assert_eq!(
