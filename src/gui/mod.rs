@@ -27,8 +27,6 @@ use files::{FileEvent, FileOrigin, FileService, SaveMode};
 
 pub use persistence::PersistedWorkspace;
 pub use session::DebugSession;
-#[allow(unused_imports)]
-pub use session::SessionState;
 pub(crate) use workspace::EditorTabKind;
 pub use workspace::{EditorTab, Workspace};
 

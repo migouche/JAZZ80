@@ -63,7 +63,7 @@ pub(super) fn decode_ed(cpu: &mut Z80A, opcode: u8) {
                 }
             }
             2 => {
-                if !parts.pair_high() {
+                if !parts.q {
                     test_log!(cpu, "SBC HL, rp[p]");
                     let dest = AddressingMode::RegisterPair(RegisterPair::HL);
                     let rp = cpu.table_rp(parts.pair_index());
@@ -76,7 +76,7 @@ pub(super) fn decode_ed(cpu: &mut Z80A, opcode: u8) {
                 }
             }
             3 => {
-                if !parts.pair_high() {
+                if !parts.q {
                     test_log!(cpu, "LD (nn), rp[p]");
                     let addr = cpu.fetch_word();
                     let src = cpu.table_rp(parts.pair_index());
@@ -261,7 +261,7 @@ pub(super) fn decode_unprefixed(cpu: &mut Z80A, opcode: u8, addressing: PrefixAd
                 _ => unreachable!("Invalid y value"),
             },
             1 => {
-                if parts.pair_high() {
+                if parts.q {
                     test_log!(cpu, "ADD HL/IX/IY, rp[p]");
                     let dest = cpu.transform_register(
                         AddressingMode::RegisterPair(RegisterPair::HL),
@@ -278,7 +278,7 @@ pub(super) fn decode_unprefixed(cpu: &mut Z80A, opcode: u8, addressing: PrefixAd
                     cpu.ld_16(src, AddressingMode::ImmediateExtended(nn));
                 }
             }
-            2 => match (parts.pair_high(), parts.pair_index()) {
+            2 => match (parts.q, parts.pair_index()) {
                 (false, 0) => {
                     test_log!(cpu, "LD (BC), A");
                     cpu.ld(
@@ -344,7 +344,7 @@ pub(super) fn decode_unprefixed(cpu: &mut Z80A, opcode: u8, addressing: PrefixAd
                 _ => unreachable!("Invalid q, p values"),
             },
             3 => {
-                if !parts.pair_high() {
+                if !parts.q {
                     test_log!(cpu, "INC rp[p]");
                     let rp = cpu.table_rp(parts.pair_index());
                     let dest = cpu.transform_register(AddressingMode::RegisterPair(rp), addressing);
@@ -479,7 +479,7 @@ pub(super) fn decode_unprefixed(cpu: &mut Z80A, opcode: u8, addressing: PrefixAd
                     cpu.pc = cpu.pop();
                 }
             }
-            1 => match (parts.pair_high(), parts.pair_index()) {
+            1 => match (parts.q, parts.pair_index()) {
                 (false, _) => {
                     test_log!(cpu, "POP rp2[p]");
                     let rp = cpu.table_rp2(parts.pair_index());
@@ -580,7 +580,7 @@ pub(super) fn decode_unprefixed(cpu: &mut Z80A, opcode: u8, addressing: PrefixAd
                     cpu.pc = addr;
                 }
             }
-            5 => match (parts.pair_high(), parts.pair_index()) {
+            5 => match (parts.q, parts.pair_index()) {
                 (false, _) => {
                     test_log!(cpu, "PUSH rp2[p]");
                     let rp = cpu.table_rp2(parts.pair_index());

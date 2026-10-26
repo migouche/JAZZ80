@@ -286,11 +286,6 @@ impl OpcodeParts {
     pub fn pair_index(&self) -> u8 {
         self.p
     }
-
-    /// `q` variant selector: the low bit of `y` (bit 3).
-    pub fn pair_high(&self) -> bool {
-        self.q
-    }
 }
 
 /// Decodes an opcode byte into its five fields.
