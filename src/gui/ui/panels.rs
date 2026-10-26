@@ -419,7 +419,7 @@ pub(crate) fn show_variables(app: &mut Z80App, ui: &mut egui::Ui) {
                                                     .map(|b| format!("{:02X}", b))
                                                     .collect();
 
-                                                ui.monospace(format!("[{}...]", hex_str.join(" ")))
+                                                ui.monospace(format!("[{}…]", hex_str.join(" ")))
                                                     .on_hover_text(format!(
                                                         "Length: {}\nFull: [{}]",
                                                         len,
@@ -537,7 +537,7 @@ pub(crate) fn show_variables(app: &mut Z80App, ui: &mut egui::Ui) {
                                             .iter()
                                             .map(|b| format!("{:02X}", b))
                                             .collect();
-                                        ui.monospace(format!("[{}...]", hex_str.join(" ")))
+                                        ui.monospace(format!("[{}…]", hex_str.join(" ")))
                                             .on_hover_text(format!(
                                                 "Length: {}\nFull: [{}]",
                                                 len,
@@ -593,7 +593,7 @@ pub(crate) fn show_variables(app: &mut Z80App, ui: &mut egui::Ui) {
                                                     (low as u16) | ((high as u16) << 8)
                                                 ));
                                             }
-                                            ui.monospace(format!("[{}...]", words.join(" ")))
+                                            ui.monospace(format!("[{}…]", words.join(" ")))
                                                 .on_hover_text(format!(
                                                     "Length: {} bytes\nFull: [{}]",
                                                     len,
