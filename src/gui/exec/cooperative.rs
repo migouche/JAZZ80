@@ -42,7 +42,7 @@ impl Runner for Cooperative {
         while let Some(command) = self.pending.pop_front() {
             match command {
                 Command::Nmi => machine.cpu.nmi(),
-                Command::SetInterrupt(v) => machine.cpu.set_interrupt(v),
+                Command::PulseInterrupt => machine.cpu.pulse_interrupt(),
                 Command::SetBreakpoints(bp) => self.breakpoints = bp,
                 Command::Resume => machine.cpu.set_halted(false),
                 Command::Tick => machine.cpu.tick(),

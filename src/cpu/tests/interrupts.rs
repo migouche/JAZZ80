@@ -157,3 +157,34 @@ fn test_retn() {
     assert_eq!(cpu.pc, 0x5678);
     assert!(cpu.iff1);
 }
+
+#[test]
+fn a_pulse_is_serviced_exactly_once() {
+    let mut cpu = setup_cpu();
+    cpu.sp = 0xFFFE;
+
+    // 0000: IM 1
+    cpu.memory.write(0x0000, 0xED);
+    cpu.memory.write(0x0001, 0x56);
+    // 0002: EI, then NOPs
+    cpu.memory.write(0x0002, 0xFB);
+    // ISR: EI, then NOPs. If the pulse survives its service, re-enabling
+    // interrupts here makes the CPU re-enter the ISR forever.
+    cpu.memory.write(0x0038, 0xFB);
+
+    cpu.tick(); // IM 1
+    cpu.tick(); // EI
+    cpu.pulse_interrupt();
+    cpu.tick(); // The instruction after EI still runs before the interrupt
+    cpu.tick(); // Service
+    assert_eq!(cpu.pc, 0x0038);
+    assert_eq!(cpu.pop(), 0x0004);
+
+    for _ in 0..6 {
+        cpu.tick();
+    }
+    assert!(
+        cpu.pc > 0x0038,
+        "one pulse serviced twice: pc stayed at the ISR entry"
+    );
+}

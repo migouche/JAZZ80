@@ -1,13 +1,15 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod assembler;
 mod components;
 mod cpu;
 mod emulator;
 mod gui;
+mod locking;
 mod traits;
 mod ui_traits;
 
 #[cfg(not(target_arch = "wasm32"))]
-#[cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 fn main() -> eframe::Result<()> {
     gui::run()
 }
