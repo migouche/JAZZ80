@@ -437,3 +437,72 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
         ui.label("No files open");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gui::workspace::EditorTab;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+    use std::collections::HashSet;
+
+    fn tab(id: u64, code: &str) -> EditorTab {
+        EditorTab {
+            id,
+            path: None,
+            code: code.to_string(),
+            kind: EditorTabKind::Source,
+            is_dirty: false,
+            breakpoints: HashSet::new(),
+            binary_bytes: None,
+        }
+    }
+
+    #[test]
+    fn undo_is_isolated_per_tab() {
+        let mut app = Z80App::default();
+        app.workspace.tabs = vec![tab(1, "AAA"), tab(2, "BBB")];
+        app.workspace.active_tab = 0;
+
+        // The editor TextEdit has no accessible name, and typing marks the tab
+        // dirty, which draws a glyph the test font lacks.
+        let mut harness = Harness::builder()
+            .with_accessibility_check(false)
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, app: &mut Z80App| {
+                    let _ = show(app, ui);
+                },
+                app,
+            );
+
+        harness
+            .get_by_role(egui::accesskit::Role::MultilineTextInput)
+            .focus();
+        harness.run();
+        harness
+            .get_by_role(egui::accesskit::Role::MultilineTextInput)
+            .type_text("1");
+        harness.run();
+        assert!(
+            harness.state().workspace.tabs[0].code.contains('1'),
+            "typing must edit the active tab: {:?}",
+            harness.state().workspace.tabs[0].code
+        );
+
+        harness.state_mut().workspace.active_tab = 1;
+        harness.run();
+        harness
+            .get_by_role(egui::accesskit::Role::MultilineTextInput)
+            .focus();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+        harness.run();
+
+        assert_eq!(
+            harness.state().workspace.tabs[1].code,
+            "BBB",
+            "undo on an untouched tab replayed another tab's history"
+        );
+    }
+}

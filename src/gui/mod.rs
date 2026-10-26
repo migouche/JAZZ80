@@ -922,6 +922,21 @@ START:
         self.apply_file_events(events, storage);
     }
 
+    /// Syncs gutter breakpoints before dispatching, so a run started by this
+    /// frame's action sees the breakpoints the user just set.
+    fn dispatch_frame_action(
+        &mut self,
+        action: Option<HeaderAction>,
+        ctx: &egui::Context,
+        frame: &mut eframe::Frame,
+    ) {
+        self.sync_breakpoints();
+
+        if let Some(action) = action {
+            self.process_header_action(action, ctx, frame);
+        }
+    }
+
     fn process_header_action(
         &mut self,
         action: HeaderAction,
@@ -1069,14 +1084,7 @@ impl eframe::App for Z80App {
             }
         });
 
-        // Breakpoints may have been toggled in the gutter during this frame. Sync
-        // them before dispatching so a run started by this frame's action sees
-        // the breakpoints the user just set.
-        self.sync_breakpoints();
-
-        if let Some(action) = action {
-            self.process_header_action(action, &ctx, frame);
-        }
+        self.dispatch_frame_action(action, &ctx, frame);
 
         // Handle Modal Dialogs
         ui::modals::show(self, &ctx, frame);
@@ -1417,5 +1425,33 @@ mod shortcut_tests {
             Z80App::default().check_shortcuts(&ctx),
             Some(HeaderAction::SaveFile)
         ));
+    }
+}
+
+#[cfg(test)]
+mod frame_action_tests {
+    use super::*;
+
+    #[test]
+    fn breakpoints_are_synced_before_dispatch() {
+        let mut app = Z80App::default();
+        app.workspace.program_loaded = true;
+        app.workspace.line_to_address.insert(1, 0);
+        app.workspace.tabs[0].breakpoints.insert(1);
+        app.session.machine_mut().unwrap().cpu.set_pc(0);
+        app.session.refresh_snapshot();
+        assert!(app.session.breakpoints().is_empty());
+
+        let ctx = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        app.dispatch_frame_action(Some(HeaderAction::ToggleRun), &ctx, &mut frame);
+
+        assert_eq!(
+            app.session.snapshot().pc,
+            1,
+            "a breakpoint set this frame must be seen by the run it starts"
+        );
+        assert_eq!(app.session.breakpoints(), &HashSet::from([0]));
+        let _ = app.session.runner_mut().take_machine();
     }
 }
