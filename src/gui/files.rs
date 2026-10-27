@@ -1,5 +1,3 @@
-
-
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
@@ -195,7 +193,10 @@ impl FileService {
         text: &str,
     ) -> Vec<FileEvent> {
         let _ = name;
-        let _ = FileEvent::SourceDownloaded { tab_id, name: name.to_string() };
+        let _ = FileEvent::SourceDownloaded {
+            tab_id,
+            name: name.to_string(),
+        };
         #[cfg(target_arch = "wasm32")]
         let _ = FileEvent::ExamplesListed(Vec::new());
         let path = match path {

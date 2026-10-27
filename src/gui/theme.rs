@@ -21,7 +21,6 @@ mod palette {
     pub(super) const WHITE: Color32 = Color32::WHITE;
 }
 
-
 #[derive(Clone, Copy, Debug)]
 pub struct SyntaxColors {
     pub comment: egui::Color32,

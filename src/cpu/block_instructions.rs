@@ -22,7 +22,6 @@ impl Z80A {
                 self.set_flag(false, Flag::H);
                 self.set_flag(false, Flag::N);
                 self.set_flag(next_bc != 0, Flag::PV);
-
             }
             BlockInstruction::LDIR => {
                 self.execute_block_instruction_impl(BlockInstruction::LDI);

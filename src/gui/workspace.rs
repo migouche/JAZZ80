@@ -26,7 +26,6 @@ pub struct EditorTab {
     pub binary_bytes: Option<Vec<u8>>,
 }
 
-
 pub struct Workspace {
     pub tabs: Vec<EditorTab>,
     pub active_tab: usize,
@@ -98,7 +97,6 @@ impl Workspace {
             .position(|tab| tab.path.as_deref() == Some(path))
     }
 
-
     pub fn focus_tab(&mut self, index: usize) -> bool {
         if index >= self.tabs.len() {
             return false;
@@ -109,7 +107,7 @@ impl Workspace {
         }
         true
     }
-    
+
     pub fn active_name(&self) -> String {
         self.active()
             .and_then(|tab| tab.path.as_ref())
@@ -197,7 +195,6 @@ impl Workspace {
         self.active_tab
     }
 
-
     pub fn close(&mut self, index: usize) -> bool {
         if index >= self.tabs.len() {
             return false;
@@ -239,7 +236,6 @@ impl Workspace {
         self.recent_files.insert(0, path);
         self.recent_files.truncate(10);
     }
-
 
     pub fn breakpoint_addresses(&self) -> HashSet<u16> {
         let mut addresses = HashSet::new();

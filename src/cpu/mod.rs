@@ -254,7 +254,6 @@ struct GeneralSet {
     l: u8,
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpcodeParts {
     pub x: u8,

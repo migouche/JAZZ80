@@ -25,7 +25,6 @@ impl SessionState {
     }
 }
 
-
 pub struct DebugSession {
     machine: Option<Machine>,
     snapshot: MachineSnapshot,

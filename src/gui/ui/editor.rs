@@ -360,7 +360,6 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
 
                     let is_binary_tab = current_tab.kind == EditorTabKind::Binary;
 
-
                     let font_id = egui::FontId::monospace(AppTheme::MONO_FONT_SIZE);
                     let longest = current_tab
                         .code

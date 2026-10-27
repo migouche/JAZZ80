@@ -12,7 +12,6 @@ pub fn highlight(
     let mut job = egui::text::LayoutJob::default();
     let font_id = egui::FontId::monospace(AppTheme::MONO_FONT_SIZE);
 
-
     let lines: Vec<&str> = code.split('\n').collect();
 
     for (line_idx, line) in lines.iter().enumerate() {
@@ -166,7 +165,6 @@ pub fn highlight(
 
     job
 }
-
 
 #[derive(Default)]
 pub struct HighlightCache {

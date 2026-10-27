@@ -1,6 +1,5 @@
 use super::Token;
 
-
 pub(super) fn data_column(tokens: &[Token], bytes: &[u8]) -> String {
     // `ORG` emits padding bytes, but the listing does not show them, and lines
     // without a mnemonic or bytes have nothing to show.
@@ -23,7 +22,6 @@ pub(super) fn data_column(tokens: &[Token], bytes: &[u8]) -> String {
             .chunks(2)
             .map(|chunk| {
                 if chunk.len() == 2 {
-    
                     format!("{:02X}{:02X}", chunk[1], chunk[0])
                 } else {
                     format!("{:02X}", chunk[0])
@@ -32,7 +30,6 @@ pub(super) fn data_column(tokens: &[Token], bytes: &[u8]) -> String {
             .collect::<Vec<_>>()
             .join(", "),
         _ => {
-
             let op_len = if bytes.len() > 1 && matches!(bytes[0], 0xCB | 0xDD | 0xED | 0xFD) {
                 2
             } else {

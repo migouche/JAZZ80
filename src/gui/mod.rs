@@ -902,7 +902,6 @@ START:
         self.apply_file_events(events, storage);
     }
 
-
     fn dispatch_frame_action(
         &mut self,
         action: Option<HeaderAction>,

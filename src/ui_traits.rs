@@ -7,7 +7,6 @@ pub trait DeviceWithUi: IODevice + Send {
     fn get_window_open_state(&self) -> bool;
     fn set_window_open_state(&mut self, open: bool);
 
-
     fn show_window(
         &mut self,
         ctx: &egui::Context,

@@ -3,7 +3,6 @@ use super::{DeviceSpec, SymbolDisplayFormat};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-
 pub const WORKSPACE_VERSION: u32 = 1;
 
 #[derive(serde::Deserialize, serde::Serialize)]

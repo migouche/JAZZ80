@@ -9,7 +9,6 @@ pub(crate) fn show(
     frame: &mut eframe::Frame,
     ui: &mut egui::Ui,
 ) -> Option<HeaderAction> {
-
     #[cfg(not(target_arch = "wasm32"))]
     let _ = frame;
 
