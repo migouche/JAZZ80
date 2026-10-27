@@ -1,6 +1,5 @@
 use crate::assembler::assemble_with_metadata;
 
-/// The listing Data column for a 1-based source line.
 fn line(code: &str, n: usize) -> String {
     let result = assemble_with_metadata(code).expect("assembles");
     result

@@ -13,7 +13,6 @@ pub(crate) fn show(app: &mut Z80App, ui: &mut egui::Ui) -> Option<HeaderAction> 
 
 fn show_tab_bar(app: &mut Z80App, ui: &mut egui::Ui) -> Option<HeaderAction> {
     let mut action = None;
-    // Tab Bar
     ui.horizontal(|ui| {
         egui::ScrollArea::horizontal()
             .id_salt("tabs_scroll")
@@ -32,7 +31,6 @@ fn show_tab_bar(app: &mut Z80App, ui: &mut egui::Ui) -> Option<HeaderAction> {
 
                         let is_active = i == app.workspace.active_tab;
 
-                        // Visuals
                         let bg_color = if is_active {
                             app.theme.tab_active_bg
                         } else {
@@ -84,7 +82,6 @@ fn show_tab_bar(app: &mut Z80App, ui: &mut egui::Ui) -> Option<HeaderAction> {
                                         );
                                     }
 
-                                    // Close button (x)
                                     if ui
                                         .add(
                                             egui::Button::new(
@@ -213,11 +210,9 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
 
                 let font_id = egui::FontId::monospace(AppTheme::MONO_FONT_SIZE);
 
-                // 1. Line numbers column
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
 
-                    // Header for Line
                     ui.label(
                         egui::RichText::new("Line")
                             .font(font_id.clone())
@@ -262,7 +257,6 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
                             })
                             .clicked()
                         {
-                            // Toggle breakpoint
                             if is_bp {
                                 current_tab.breakpoints.remove(&i);
                             } else {
@@ -272,11 +266,9 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
                     }
                 });
 
-                // 2. Location Counter Columns
                 if app.workspace.show_location_counter {
                     ui.add_space(AppTheme::COLUMN_GAP);
 
-                    // Address Column
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
                         ui.label(
@@ -318,7 +310,6 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
 
                     ui.add_space(AppTheme::COLUMN_GAP);
 
-                    // Data Column
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
                         ui.label(
@@ -351,10 +342,8 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
 
                     ui.add_space(AppTheme::COLUMN_GAP);
                 }
-                // 3. Code Editor Column
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    // Add a matching header so the text edit component starts exactly on the same row!
                     ui.label(
                         egui::RichText::new("Code")
                             .font(font_id.clone())
@@ -371,9 +360,7 @@ fn show_listing(app: &mut Z80App, ui: &mut egui::Ui) {
 
                     let is_binary_tab = current_tab.kind == EditorTabKind::Binary;
 
-                    // Long lines are reachable via a horizontal scrollbar
-                    // instead of wrapping: wrapping would add visual rows
-                    // and desynchronise the line-number/address gutters.
+
                     let font_id = egui::FontId::monospace(AppTheme::MONO_FONT_SIZE);
                     let longest = current_tab
                         .code

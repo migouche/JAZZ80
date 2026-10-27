@@ -1,10 +1,5 @@
 use std::sync::{Mutex, MutexGuard};
 
-/// Lock a shared device, recovering the guard if a previous holder panicked.
-///
-/// A poisoned device leaves the emulator in an unknown state, but aborting the
-/// whole UI would also discard the user's unsaved work, so recover and keep
-/// going.
 pub(crate) fn lock_or_recover<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()

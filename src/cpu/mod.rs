@@ -254,45 +254,30 @@ struct GeneralSet {
     l: u8,
 }
 
-/// The five fields the Z80 opcode byte is decoded into.
-///
-/// See <http://www.z80.info/decoding.htm> for the decoding table.
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpcodeParts {
-    /// 1st octal digit (bits 7-6): selects the instruction group.
     pub x: u8,
-    /// 2nd octal digit (bits 5-3).
     pub y: u8,
-    /// 3rd octal digit (bits 2-0).
     pub z: u8,
-    /// `y` shifted right once (bits 5-4): the register-pair index.
     pub p: u8,
-    /// Low bit of `y` (bit 3): the `q` variant selector.
     pub q: bool,
 }
 
 impl OpcodeParts {
-    /// Register index: the `r[z]` slot.
     pub fn reg_index(&self) -> u8 {
         self.z
     }
 
-    /// ALU operation index: the `ALU[y]` slot.
     pub fn alu_op_index(&self) -> u8 {
         self.y
     }
 
-    /// Register-pair index: the `rp[p]` / `rp2[p]` slot.
     pub fn pair_index(&self) -> u8 {
         self.p
     }
 }
 
-/// Decodes an opcode byte into its five fields.
-///
-/// See <http://www.z80.info/decoding.htm>: `x` is the 1st octal digit
-/// (bits 7-6), `y` the 2nd (bits 5-3) and `z` the 3rd (bits 2-0); `p` is
-/// `y >> 1` (bits 5-4) and `q` is `y % 2` (bit 3).
 pub(super) fn decode_opcode(opcode: u8) -> OpcodeParts {
     let x = (opcode >> 6) & 0b11;
     let y = (opcode >> 3) & 0b111;
@@ -302,7 +287,6 @@ pub(super) fn decode_opcode(opcode: u8) -> OpcodeParts {
     OpcodeParts { x, y, z, p, q }
 }
 
-/// Test-only decode trace, in chronological order.
 #[cfg(test)]
 #[derive(Default)]
 struct TraceLog {
@@ -341,7 +325,7 @@ pub struct Z80A {
     interrupt_mode: u8,
     nmi_pending: bool,
     int_pending: bool,
-    nmi_last_state: bool, // Track NMI line state for edge detection
+    nmi_last_state: bool,
     pub(super) iff_delay_count: u8,
 
     #[cfg(test)]
@@ -786,8 +770,6 @@ impl Z80A {
         value
     }
 
-    // TABLES FROM http://www.z80.info/decoding.htm
-
     fn table_r(&mut self, p: u8) -> RegOps {
         match RegOps::try_from(p) {
             Ok(r) => {
@@ -849,7 +831,6 @@ impl Z80A {
             }
             ALUOperation::CP => {
                 let (_, flags) = alu_op::sub(self.get_register(GPR::A), value, false);
-                // result is ignored for CP
                 self.af_registers[self.active_af].f = flags;
             }
         }
@@ -859,7 +840,6 @@ impl Z80A {
         let value = self.read_8(dest);
         let (result, flags) = inc(value);
 
-        // Preserve Carry flag
         let current_carry = self.get_flag(Flag::C) as u8;
         self.af_registers[self.active_af].f = flags | current_carry;
 
@@ -870,7 +850,6 @@ impl Z80A {
         let value = self.read_8(dest);
         let (result, flags) = dec(value);
 
-        // Preserve Carry flag
         let current_carry = self.af_registers[self.active_af].f & flags::CARRY;
         self.af_registers[self.active_af].f = flags | current_carry;
 
@@ -1395,10 +1374,6 @@ impl Z80A {
             return true;
         }
 
-        // Handle Maskable Interrupts (Level triggered)
-        // Check if interrupts enabled and pending.
-        // Important: If we just executed EI (iff_delay_count > 0), iff1 is not yet true.
-        // Also check if delay is active (interrupts are inhibited during the instruction after EI)
         if self.iff1 && self.is_int_line_active() && self.iff_delay_count == 0 {
             self.halted = false; // Wake from HALT
             self.handle_int();

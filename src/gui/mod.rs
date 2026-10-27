@@ -30,8 +30,6 @@ pub use session::DebugSession;
 pub(crate) use workspace::EditorTabKind;
 pub use workspace::{EditorTab, Workspace};
 
-// Example programs bundled into the web build. `build.rs` generates this
-// list from `z80 files/examples.json`, so a missing example fails the build.
 #[cfg(target_arch = "wasm32")]
 include!(concat!(env!("OUT_DIR"), "/bundled_examples.inc"));
 
@@ -70,7 +68,6 @@ impl HeaderAction {
         }
     }
 
-    /// The label used by the keyboard-shortcuts dialog.
     fn label(&self) -> &'static str {
         match self {
             Self::ToggleRun => "Run / Stop",
@@ -317,8 +314,7 @@ START:
     fn check_shortcuts(&self, ctx: &egui::Context) -> Option<HeaderAction> {
         let mut action = None;
         let mut binds = Self::keybinds();
-        // `consume_key` ignores extra Shift/Alt, so the most specific binding
-        // must be offered first or it is shadowed by the plainer one.
+
         binds.sort_by_key(|(modifiers, _, _)| {
             std::cmp::Reverse(u8::from(modifiers.shift) + u8::from(modifiers.alt))
         });
@@ -376,9 +372,6 @@ START:
             self.workspace.clear_assembly();
             self.last_error = None;
 
-            // `binary_bytes` is not serialised, so a tab restored from storage
-            // only has its hexdump. Recover the bytes from the dump instead of
-            // leaving a dead tab behind.
             let bytes = {
                 let active_tab = &self.workspace.tabs[active];
                 active_tab
@@ -440,9 +433,6 @@ START:
             self.session.refresh_snapshot();
             result
         } else {
-            // Machine is running in the runner; we cannot edit it directly.
-            // The UI should send commands instead. This is a fallback that
-            // takes the machine back (stopping execution) and applies the edit.
             let mut machine = self.session.runner_mut().take_machine();
             let result = f(&mut machine);
             self.session.set_machine(Some(machine));
@@ -510,7 +500,6 @@ START:
             .contains(&self.session.snapshot().pc)
             && let Some(machine) = self.session.machine_mut()
         {
-            // Standing on a breakpoint would stop again immediately; step over.
             machine.cpu.tick();
             self.session.refresh_snapshot();
         }
@@ -564,7 +553,6 @@ START:
                 None => Self::default(),
             };
 
-        // Devices are not serialised directly; rebuild them from their specs.
         let specs = app.attached_device_specs.clone();
         for spec in &specs {
             app.attach_device_spec(spec);
@@ -593,8 +581,6 @@ START:
         ctx: &egui::Context,
         storage: Option<&mut (dyn eframe::Storage + 'static)>,
     ) {
-        // "Open" is for Z80 assembly source only. Use "Load Binary…" to import
-        // a raw binary image.
         let events = self.files.pick_source(ctx);
         self.apply_file_events(events, storage);
     }
@@ -735,8 +721,6 @@ START:
     }
 
     fn save_file(&mut self, tab_idx: usize, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
-        // A binary tab's `code` is a hexdump, not source. Writing it back would
-        // destroy the .bin file it was loaded from.
         if self
             .workspace
             .tabs
@@ -909,8 +893,6 @@ START:
             }
             #[cfg(target_arch = "wasm32")]
             FileEvent::ExamplesListed(list) => self.examples_list = list,
-            #[cfg(not(target_arch = "wasm32"))]
-            FileEvent::ExamplesListed(_) => {}
             FileEvent::Failed(message) => self.last_error = Some(message),
         }
     }
@@ -920,8 +902,7 @@ START:
         self.apply_file_events(events, storage);
     }
 
-    /// Syncs gutter breakpoints before dispatching, so a run started by this
-    /// frame's action sees the breakpoints the user just set.
+
     fn dispatch_frame_action(
         &mut self,
         action: Option<HeaderAction>,
@@ -959,7 +940,6 @@ START:
             HeaderAction::ToggleRun => self.toggle_execution(),
             HeaderAction::StepInstruction => self.step_instruction(),
             HeaderAction::Quit => {
-                // This triggers on_close_event
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
@@ -1003,7 +983,6 @@ START:
             return;
         }
 
-        // Remove if exists to move it to the top
         self.workspace.add_recent_file(path);
     }
 }
@@ -1042,7 +1021,6 @@ impl eframe::App for Z80App {
         let ctx = ui.ctx().clone();
         self.poll_files(frame.storage_mut());
 
-        // Handle window close request
         if ctx.input(|i| i.viewport().close_requested()) {
             let any_dirty = self.workspace.tabs.iter().any(|t| t.is_dirty);
             if any_dirty {
@@ -1053,18 +1031,14 @@ impl eframe::App for Z80App {
 
         let mut action = self.check_shortcuts(&ctx);
 
-        // Top Panel: Menu Bar and Control Toolbar
         egui::Panel::top("top_panel").show(ui, |ui| {
             if let Some(header_action) = ui::header::show(self, frame, ui) {
                 action = Some(header_action);
             }
         });
 
-        // Bottom Status Bar. Added before the side panels so it spans the full
-        // window width, which gives long error messages room to breathe.
         egui::Panel::bottom("status_bar").show(ui, |ui| ui::status_bar::show(self, ui));
 
-        // Right Panel: Registers and Flags
         egui::Panel::right("right_panel")
             .resizable(true)
             .default_size(280.0)
@@ -1075,7 +1049,6 @@ impl eframe::App for Z80App {
             .default_size(280.0)
             .show(ui, |ui| ui::panels::show_variables(self, ui));
 
-        // Central Panel: Code Editor
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(editor_action) = ui::editor::show(self, ui) {
                 action = Some(editor_action);
@@ -1084,19 +1057,14 @@ impl eframe::App for Z80App {
 
         self.dispatch_frame_action(action, &ctx, frame);
 
-        // Handle Modal Dialogs
         ui::modals::show(self, &ctx, frame);
 
-        // Keyboard shortcut reference
         ui::windows::show_shortcuts(self, &ctx);
 
-        // Poll execution events from the runner
         self.poll_execution(&ctx);
 
-        // Draw Memory Viewer Window
         ui::windows::show_memory_viewer(self, ui);
 
-        // Draw separate windows for devices
         ui::windows::show_devices(self, &ctx);
     }
 }

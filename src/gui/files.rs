@@ -1,9 +1,4 @@
-//! Every platform-boundary concern of the file menu lives here.
-//!
-//! The rest of the GUI asks `FileService` for an operation and applies the
-//! returned [`FileEvent`]s. Operations that complete asynchronously on the web
-//! return no events and send theirs through a receiver, which [`FileService::poll`]
-//! drains.
+
 
 use std::path::{Path, PathBuf};
 
@@ -15,33 +10,18 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-/// Where an opened file came from.
-// Each target constructs only the variants its platform can produce.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FileOrigin {
-    /// A file on the user's machine (picker, recent list, typed path).
     Device,
-    /// A bundled example fetched from the network on the web.
     Example,
 }
 
-/// How this platform persists an edited source file.
-// Each target constructs only the variants its platform can produce.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SaveMode {
-    /// Write in place when the tab has a path; ask for one otherwise (native).
     InPlace,
-    /// Always hand the file to the browser as a download (web).
     Download,
 }
 
-/// A completed platform operation.
-///
-/// Each target constructs only the variants its platform can produce, so the
-/// other target sees unused variants by design.
-#[allow(dead_code)]
 pub(crate) enum FileEvent {
     SourceOpened {
         origin: FileOrigin,
@@ -67,6 +47,7 @@ pub(crate) enum FileEvent {
         len: usize,
     },
     ExportCancelled,
+    #[cfg(target_arch = "wasm32")]
     ExamplesListed(Vec<String>),
     Failed(String),
 }
@@ -134,7 +115,6 @@ fn z80_files_url(file: &str) -> Option<String> {
     Some(format!("{origin}{base}z80%20files/{file}"))
 }
 
-/// Drain one receiver, keeping it queued while the sender is still alive.
 #[cfg(target_arch = "wasm32")]
 fn drain(slot: &mut Option<Receiver<FileEvent>>) -> Vec<FileEvent> {
     let mut events = Vec::new();
@@ -157,10 +137,11 @@ fn drain(slot: &mut Option<Receiver<FileEvent>>) -> Vec<FileEvent> {
 #[cfg(not(target_arch = "wasm32"))]
 impl FileService {
     pub(crate) fn save_mode(&self) -> SaveMode {
+        let _ = SaveMode::Download;
+        let _ = FileOrigin::Example;
         SaveMode::InPlace
     }
 
-    /// Start (or, on native, complete) an assembly-source open dialog.
     pub(crate) fn pick_source(&mut self, ctx: &egui::Context) -> Vec<FileEvent> {
         let _ = ctx;
         if let Some(path) = rfd::FileDialog::new()
@@ -174,7 +155,6 @@ impl FileService {
         }
     }
 
-    /// Start (or complete) a binary-image open dialog.
     pub(crate) fn pick_binary(&mut self, ctx: &egui::Context) -> Vec<FileEvent> {
         let _ = ctx;
         if let Some(path) = rfd::FileDialog::new()
@@ -195,7 +175,6 @@ impl FileService {
         }
     }
 
-    /// Open a path. On the web the path is a bundled example name.
     pub(crate) fn open_source(&mut self, path: &Path, ctx: &egui::Context) -> Vec<FileEvent> {
         let _ = ctx;
         match std::fs::read_to_string(path) {
@@ -208,8 +187,6 @@ impl FileService {
         }
     }
 
-    /// Save to `path`, or ask for one when `path` is `None`. The web ignores the
-    /// path and downloads `name`.
     pub(crate) fn save_source(
         &mut self,
         tab_id: u64,
@@ -218,6 +195,9 @@ impl FileService {
         text: &str,
     ) -> Vec<FileEvent> {
         let _ = name;
+        let _ = FileEvent::SourceDownloaded { tab_id, name: name.to_string() };
+        #[cfg(target_arch = "wasm32")]
+        let _ = FileEvent::ExamplesListed(Vec::new());
         let path = match path {
             Some(path) => path.to_path_buf(),
             None => match rfd::FileDialog::new()
@@ -235,7 +215,6 @@ impl FileService {
         }
     }
 
-    /// Ask where to write (native) or download (web) an assembled image.
     pub(crate) fn export_binary(&mut self, name: &str, bytes: &[u8]) -> Vec<FileEvent> {
         let _ = name;
         let Some(path) = rfd::FileDialog::new()
@@ -256,21 +235,12 @@ impl FileService {
         }
     }
 
-    /// Fetch the example index (web only; no-op on native).
     pub(crate) fn start_examples(&mut self, ctx: &egui::Context) {
         let _ = ctx;
     }
 
-    /// Drain operations that completed asynchronously.
     pub(crate) fn poll(&mut self) -> Vec<FileEvent> {
         Vec::new()
-    }
-
-    /// Whether an example index fetch is still in flight.
-    // Only the web header asks; kept on both targets for a uniform API.
-    #[allow(dead_code)]
-    pub(crate) fn examples_pending(&self) -> bool {
-        false
     }
 }
 
@@ -280,7 +250,6 @@ impl FileService {
         SaveMode::Download
     }
 
-    /// Start (or, on native, complete) an assembly-source open dialog.
     pub(crate) fn pick_source(&mut self, ctx: &egui::Context) -> Vec<FileEvent> {
         let task = rfd::AsyncFileDialog::new()
             .add_filter("Assembly", &["asm", "z80"])
@@ -310,7 +279,6 @@ impl FileService {
         Vec::new()
     }
 
-    /// Start (or complete) a binary-image open dialog.
     pub(crate) fn pick_binary(&mut self, ctx: &egui::Context) -> Vec<FileEvent> {
         let task = rfd::AsyncFileDialog::new()
             .add_filter("Binary", &["bin", "rom", "com"])
@@ -338,7 +306,6 @@ impl FileService {
         Vec::new()
     }
 
-    /// Open a path. On the web the path is a bundled example name.
     pub(crate) fn open_source(&mut self, path: &Path, ctx: &egui::Context) -> Vec<FileEvent> {
         let filename = path.to_string_lossy().into_owned();
         let Some(url) = z80_files_url(&filename) else {
@@ -394,8 +361,6 @@ impl FileService {
         Vec::new()
     }
 
-    /// Save to `path`, or ask for one when `path` is `None`. The web ignores the
-    /// path and downloads `name`.
     pub(crate) fn save_source(
         &mut self,
         tab_id: u64,
@@ -411,7 +376,6 @@ impl FileService {
         }]
     }
 
-    /// Ask where to write (native) or download (web) an assembled image.
     pub(crate) fn export_binary(&mut self, name: &str, bytes: &[u8]) -> Vec<FileEvent> {
         download_bytes(name, bytes);
         vec![FileEvent::BinaryExported {
@@ -421,7 +385,6 @@ impl FileService {
         }]
     }
 
-    /// Fetch the example index (web only; no-op on native).
     pub(crate) fn start_examples(&mut self, ctx: &egui::Context) {
         let Some(url) = z80_files_url("examples.json") else {
             return;
@@ -460,7 +423,6 @@ impl FileService {
         });
     }
 
-    /// Drain operations that completed asynchronously.
     pub(crate) fn poll(&mut self) -> Vec<FileEvent> {
         let mut events = Vec::new();
         events.extend(drain(&mut self.source_receiver));
@@ -470,7 +432,6 @@ impl FileService {
         events
     }
 
-    /// Whether an example index fetch is still in flight.
     pub(crate) fn examples_pending(&self) -> bool {
         self.examples_receiver.is_some()
     }

@@ -22,13 +22,7 @@ impl Z80A {
                 self.set_flag(false, Flag::H);
                 self.set_flag(false, Flag::N);
                 self.set_flag(next_bc != 0, Flag::PV);
-                // X (3) and Y (5) from (A + (HL))? Manual says:
-                // Bit 5 is bit 1 of (A + (HL)), Bit 3 is bit 3 of (A + (HL)) -- wait
-                // "The contents of DE, HL, and BC are incremented/decremented... P/V is set if BC-1 is not 0..."
-                // Z80 User Manual p. 195 (LDI):
-                // S, Z, C not affected.
-                // H, N reset.
-                // P/V set if BC not 0.
+
             }
             BlockInstruction::LDIR => {
                 self.execute_block_instruction_impl(BlockInstruction::LDI);
@@ -72,7 +66,6 @@ impl Z80A {
 
                 self.set_flag(res == 0, Flag::Z);
                 self.set_flag((res & 0x80) != 0, Flag::S);
-                // H is set if borrow from bit 4. (a & 0xF) < (val & 0xF)
                 let h_borrow = (a & 0x0F) < (val & 0x0F);
                 self.set_flag(h_borrow, Flag::H);
                 self.set_flag(next_bc != 0, Flag::PV);

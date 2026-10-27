@@ -1,7 +1,5 @@
 use eframe::egui;
 
-/// The One Dark palette. Every distinct colour lives here exactly once; the
-/// roles that use them live in [`AppTheme`].
 mod palette {
     use eframe::egui::Color32;
 
@@ -23,7 +21,7 @@ mod palette {
     pub(super) const WHITE: Color32 = Color32::WHITE;
 }
 
-/// Syntax-highlighting colours for the source editor.
+
 #[derive(Clone, Copy, Debug)]
 pub struct SyntaxColors {
     pub comment: egui::Color32,
@@ -67,15 +65,12 @@ pub struct AppTheme {
 
 impl AppTheme {
     pub const ONE_DARK: Self = Self {
-        // Surfaces
         bg: palette::BACKGROUND,
         panel: palette::PANEL,
         faint: palette::FAINT,
         gutter: palette::GREY,
-        // Text
         fg: palette::FOREGROUND,
         muted: palette::GREY,
-        // Semantic
         accent: palette::BLUE,
         address: palette::BLUE,
         data: palette::GREEN,
@@ -85,18 +80,14 @@ impl AppTheme {
         danger: palette::RED,
         breakpoint: palette::RED,
         breakpoint_text: palette::WHITE,
-        // Editor states
         pc_row: palette::PC_ROW,
         pc_marker: palette::GREEN,
-        // Flags
         flag_on: palette::GREEN,
         flag_on_text: palette::BACKGROUND,
         flag_off: palette::FLAG_OFF,
         flag_off_text: palette::GREY,
-        // Tabs
         tab_active_bg: palette::PC_ROW,
         tab_active_fg: palette::TAB_ACTIVE_TEXT,
-        // Syntax
         syntax: SyntaxColors {
             comment: palette::GREY,
             mnemonic: palette::PURPLE,
@@ -177,11 +168,9 @@ mod tests {
         assert_eq!(t.bg, rgb(0x21, 0x22, 0x27));
         assert_eq!(t.panel, rgb(0x28, 0x2c, 0x34));
         assert_eq!(t.faint, rgb(0x2c, 0x31, 0x3a));
-        // Text
         assert_eq!(t.gutter, rgb(0x7f, 0x84, 0x8e));
         assert_eq!(t.fg, rgb(0xab, 0xb2, 0xbf));
         assert_eq!(t.muted, rgb(0x7f, 0x84, 0x8e));
-        // Semantic
         assert_eq!(t.accent, rgb(0x61, 0xaf, 0xef));
         assert_eq!(t.address, rgb(0x61, 0xaf, 0xef));
         assert_eq!(t.data, rgb(0x98, 0xc3, 0x79));
@@ -191,18 +180,14 @@ mod tests {
         assert_eq!(t.danger, rgb(0xe0, 0x6c, 0x75));
         assert_eq!(t.breakpoint, rgb(0xe0, 0x6c, 0x75));
         assert_eq!(t.breakpoint_text, rgb(0xff, 0xff, 0xff));
-        // Editor states
         assert_eq!(t.pc_row, rgb(0x3a, 0x40, 0x4b));
         assert_eq!(t.pc_marker, rgb(0x98, 0xc3, 0x79));
-        // Flags
         assert_eq!(t.flag_on, rgb(0x98, 0xc3, 0x79));
         assert_eq!(t.flag_on_text, rgb(0x21, 0x22, 0x27));
         assert_eq!(t.flag_off, rgb(0x3a, 0x3f, 0x49));
         assert_eq!(t.flag_off_text, rgb(0x7f, 0x84, 0x8e));
-        // Tabs
         assert_eq!(t.tab_active_bg, rgb(0x3a, 0x40, 0x4b));
         assert_eq!(t.tab_active_fg, rgb(0xdc, 0xe0, 0xe6));
-        // Syntax
         assert_eq!(t.syntax.comment, rgb(0x7f, 0x84, 0x8e));
         assert_eq!(t.syntax.mnemonic, rgb(0xc6, 0x78, 0xdd));
         assert_eq!(t.syntax.register, rgb(0xe5, 0xc0, 0x7b));

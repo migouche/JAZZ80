@@ -26,7 +26,7 @@ pub struct EditorTab {
     pub binary_bytes: Option<Vec<u8>>,
 }
 
-/// Editor/workspace state that can be exercised without egui or a `Machine`.
+
 pub struct Workspace {
     pub tabs: Vec<EditorTab>,
     pub active_tab: usize,
@@ -92,17 +92,13 @@ impl Workspace {
         self.tabs.get(self.active_tab)
     }
 
-    /// Index of the tab whose path is exactly `path`.
     pub fn find_tab_by_path(&self, path: &Path) -> Option<usize> {
         self.tabs
             .iter()
             .position(|tab| tab.path.as_deref() == Some(path))
     }
 
-    /// Make `index` the active tab.
-    ///
-    /// Returns `false` when `index` is out of range. The stale flag is set only
-    /// when the active tab actually changes.
+
     pub fn focus_tab(&mut self, index: usize) -> bool {
         if index >= self.tabs.len() {
             return false;
@@ -113,12 +109,7 @@ impl Workspace {
         }
         true
     }
-
-    #[allow(dead_code)] // Part of the model API; the UI still indexes directly.
-    pub fn active_mut(&mut self) -> Option<&mut EditorTab> {
-        self.tabs.get_mut(self.active_tab)
-    }
-
+    
     pub fn active_name(&self) -> String {
         self.active()
             .and_then(|tab| tab.path.as_ref())
@@ -150,7 +141,6 @@ impl Workspace {
     }
 
     pub fn open_source(&mut self, path: PathBuf, code: String, default_code: &str) -> usize {
-        // Replace the active tab when it is an untouched, untitled scratch buffer.
         let replace_active = self.active().is_some_and(|tab| {
             tab.path.is_none()
                 && (tab.code.trim().is_empty() || tab.code == default_code)
@@ -207,10 +197,7 @@ impl Workspace {
         self.active_tab
     }
 
-    /// Remove `index` and fix up the active index.
-    ///
-    /// Returns `true` when the last tab was removed, in which case the caller
-    /// is responsible for supplying a replacement tab.
+
     pub fn close(&mut self, index: usize) -> bool {
         if index >= self.tabs.len() {
             return false;
@@ -222,11 +209,9 @@ impl Workspace {
             return true;
         }
         if closed_active {
-            // Show the neighbouring tab; its source is not what is loaded.
             self.active_tab = index.min(self.tabs.len() - 1);
             self.is_assembly_stale = true;
         } else if index < self.active_tab {
-            // Keep pointing at the same document.
             self.active_tab -= 1;
         }
         false
@@ -250,15 +235,12 @@ impl Workspace {
     }
 
     pub fn add_recent_file(&mut self, path: PathBuf) {
-        // Remove if it exists so it moves to the top.
         self.recent_files.retain(|recent| recent != &path);
         self.recent_files.insert(0, path);
-
-        // Keep only the last 10.
         self.recent_files.truncate(10);
     }
 
-    /// Addresses of the active tab's breakpoints, with unmapped lines dropped.
+
     pub fn breakpoint_addresses(&self) -> HashSet<u16> {
         let mut addresses = HashSet::new();
         if let Some(tab) = self.active() {

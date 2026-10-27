@@ -9,7 +9,7 @@ pub(crate) fn show(
     frame: &mut eframe::Frame,
     ui: &mut egui::Ui,
 ) -> Option<HeaderAction> {
-    // `frame` is only needed by the wasm-only Examples menu.
+
     #[cfg(not(target_arch = "wasm32"))]
     let _ = frame;
 
@@ -227,7 +227,6 @@ pub(crate) fn show(
     });
     ui.separator();
 
-    // Toolbar
     ui.horizontal_wrapped(|ui| {
         if ui
             .button("⟳ Assemble & Reset")

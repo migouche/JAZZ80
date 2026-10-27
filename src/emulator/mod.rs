@@ -37,18 +37,13 @@ impl Machine {
             }
         }
     }
-
-    /// Convenience wrapper for callers that need a snapshot of their own.
-    /// Prefer [`Machine::snapshot_into`] on hot paths to reuse a buffer.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub fn snapshot(&mut self) -> MachineSnapshot {
         let mut out = MachineSnapshot::default();
         self.snapshot_into(&mut out);
         out
     }
 
-    /// Writes the current machine state into `out`, reusing its memory buffer
-    /// so the steady-state snapshot path performs no allocation.
     pub fn snapshot_into(&mut self, out: &mut MachineSnapshot) {
         let _ = self.cpu.memory.take_dirty();
         out.state_from(self);
@@ -150,7 +145,6 @@ impl Default for MachineSnapshot {
 }
 
 impl MachineSnapshot {
-    /// Copies the scalar machine state into `self`, leaving `memory` untouched.
     fn state_from(&mut self, machine: &Machine) {
         self.pc = machine.cpu.get_pc();
         self.sp = machine.cpu.get_sp();

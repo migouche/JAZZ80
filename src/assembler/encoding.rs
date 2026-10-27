@@ -312,13 +312,8 @@ pub(super) fn encode_jr(
     labels: &HashMap<String, u16>,
     dry: bool,
 ) -> Result<Vec<u8>, String> {
-    // JR d / JR C, d
-    // Opcode size is 2 bytes. Offset is relative to PC+2.
-    // Target = (PC + 2) + offset (signed i8)
-    // Offset = Target - (PC + 2)
     match ops.len() {
         1 => {
-            // JR d
             let target = resolve_immediate(&ops[0], labels, dry)?;
             let offset_val = (target as i32) - ((pc as i32) + 2);
             if !dry && !(-128..=127).contains(&offset_val) {

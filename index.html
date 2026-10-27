@@ -14,7 +14,6 @@
     <link data-trunk rel="copy-dir" href="docs" />
     <style>
       html {
-        /* Remove touch delay: */
         touch-action: manipulation;
         height: 100%;
         overflow: hidden;
@@ -47,7 +46,6 @@
         background: radial-gradient(ellipse at center, #17171f 0%, #0d0d12 70%);
         z-index: 9999;
         transition: opacity 0.5s ease;
-        /* subtle scanline texture */
         background-image: repeating-linear-gradient(
           0deg,
           rgba(255, 255, 255, 0.02) 0px,
@@ -61,12 +59,10 @@
         pointer-events: none;
       }
 
-      /* --- Pulsing logo --- */
       #loading img {
         width: 180px;
         height: auto;
         animation: pulse 2.2s ease-in-out infinite;
-        /* soft cyan glow, tweak color to match the logo */
         filter: drop-shadow(0 0 18px rgba(88, 230, 255, 0.55));
       }
       @keyframes pulse {
@@ -94,7 +90,6 @@
         to { transform: rotate(360deg); }
       }
 
-      /* --- Loading text --- */
       .loading-text {
         margin-top: 18px;
         font-family: "Courier New", ui-monospace, monospace;
@@ -109,7 +104,6 @@
         to { visibility: hidden; }
       }
 
-      /* --- Girlfriend credit --- */
       .credit {
         position: absolute;
         bottom: 28px;
@@ -172,8 +166,6 @@
       </div>
     </noscript>
     <script>
-      // If the module fails to load (old browser, network error, missing
-      // WebAssembly support), the loading screen would otherwise spin forever.
       (function () {
         var loading = document.getElementById("loading");
         var timer = setTimeout(function () {

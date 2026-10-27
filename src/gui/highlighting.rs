@@ -12,10 +12,7 @@ pub fn highlight(
     let mut job = egui::text::LayoutJob::default();
     let font_id = egui::FontId::monospace(AppTheme::MONO_FONT_SIZE);
 
-    // Split on '\n' (not `str::lines`) so the produced galley reproduces the
-    // buffer byte-for-byte. `lines()` drops a trailing newline and the previous
-    // implementation appended one unconditionally, which made the galley one
-    // row longer than the buffer and put the caret on the wrong line at EOF.
+
     let lines: Vec<&str> = code.split('\n').collect();
 
     for (line_idx, line) in lines.iter().enumerate() {
@@ -43,7 +40,6 @@ pub fn highlight(
 
         let get_color = |token: &str| -> egui::Color32 {
             let upper = token.to_uppercase();
-            // Remove trailing commas for checking
             let clean = upper.trim_end_matches(',');
 
             if DIRECTIVES.contains(&clean) {
@@ -59,7 +55,6 @@ pub fn highlight(
             } else if clean.starts_with('"') || clean.starts_with('\'') {
                 theme.syntax.string
             } else {
-                // Check if number
                 if clean.chars().next().is_some_and(|c| c.is_ascii_digit())
                     || clean.starts_with('$')
                     || (clean.ends_with('H')
@@ -67,7 +62,6 @@ pub fn highlight(
                 {
                     theme.syntax.number
                 } else {
-                    // Fallback: Assume any other identifier is a label reference
                     theme.syntax.label
                 }
             }
@@ -117,7 +111,7 @@ pub fn highlight(
                     0.0,
                     egui::TextFormat {
                         font_id: font_id.clone(),
-                        color: theme.syntax.plain, // Delimiters are plain
+                        color: theme.syntax.plain,
                         background,
                         ..Default::default()
                     },
@@ -173,13 +167,7 @@ pub fn highlight(
     job
 }
 
-/// The token layout for one source buffer.
-///
-/// `TextEdit` runs its layouter every frame; re-tokenising when neither the
-/// text nor the highlighted line changed is wasted work, so the `LayoutJob`
-/// itself is cached. egui lays that job out on every call for the current
-/// `pixels_per_point` (and font atlas), so zoom and DPI changes cannot leave
-/// the editor showing a galley at a stale scale.
+
 #[derive(Default)]
 pub struct HighlightCache {
     code: String,

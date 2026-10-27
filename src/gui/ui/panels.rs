@@ -15,8 +15,6 @@ pub(crate) fn show_registers(app: &mut Z80App, ui: &mut egui::Ui) {
     });
     ui.separator();
 
-    // While a run is in progress the machine lives in the runner thread and
-    // `exec.machine` is `None`, so edits would be silently dropped.
     let can_edit = app.session.machine().is_some();
     if !can_edit {
         ui.label(
@@ -26,8 +24,6 @@ pub(crate) fn show_registers(app: &mut Z80App, ui: &mut egui::Ui) {
         );
     }
 
-    // Copy the small scalar fields instead of cloning the whole snapshot
-    // (which carries a 64 KiB memory buffer) every frame.
     let pc = app.session.snapshot().pc;
     let sp = app.session.snapshot().sp;
     let ix = app.session.snapshot().ix;
@@ -282,7 +278,6 @@ pub(crate) fn show_variables(app: &mut Z80App, ui: &mut egui::Ui) {
                     {
                         let addr = symbol.address;
 
-                        // Determine display format
                         let format = app
                             .workspace
                             .symbol_display_prefs
@@ -290,15 +285,12 @@ pub(crate) fn show_variables(app: &mut Z80App, ui: &mut egui::Ui) {
                             .cloned()
                             .unwrap_or(SymbolDisplayFormat::Default);
 
-                        // Continuation rows use an internal suffix only to keep map keys unique.
                         let display_name = if name.ends_with(']') && name.rfind('[').is_some() {
                             ""
                         } else {
                             *name
                         };
 
-                        // Format selection lives in its own column so it
-                        // can never displace the address or value.
                         ui.label(display_name);
 
                         let is_constant = symbol.kind == SymbolType::Constant;
@@ -316,7 +308,6 @@ pub(crate) fn show_variables(app: &mut Z80App, ui: &mut egui::Ui) {
                                     addr
                                 ));
                         } else {
-                            // Render based on format
                             match format {
                                 SymbolDisplayFormat::Default => {
                                     match symbol.kind {
@@ -332,9 +323,7 @@ pub(crate) fn show_variables(app: &mut Z80App, ui: &mut egui::Ui) {
                                             ui.monospace(format!("0x{:04X}", val));
                                         }
                                         SymbolType::String(len) => {
-                                            // Default String render
                                             let mut bytes = Vec::new();
-                                            // Read at most 20 chars for preview, but check for null terminator
                                             let display_len = len.min(20);
                                             for i in 0..display_len {
                                                 let b = app.session.snapshot().memory
@@ -355,9 +344,7 @@ pub(crate) fn show_variables(app: &mut Z80App, ui: &mut egui::Ui) {
                                                 })
                                                 .collect();
 
-                                            // If we hit a null or length is long, check full content for tooltip
                                             if len > 20 || bytes.len() < len.min(20) {
-                                                // Read full content for tooltip
                                                 let mut full_bytes = Vec::new();
                                                 for i in 0..len {
                                                     let b = app.session.snapshot().memory
@@ -392,7 +379,6 @@ pub(crate) fn show_variables(app: &mut Z80App, ui: &mut egui::Ui) {
                                             }
                                         }
                                         SymbolType::Array(len) => {
-                                            // Default Array render (Hex Bytes)
                                             let mut bytes = Vec::new();
                                             let display_len = len.min(8);
                                             for i in 0..display_len {
@@ -465,17 +451,11 @@ pub(crate) fn show_variables(app: &mut Z80App, ui: &mut egui::Ui) {
                                         })
                                         .collect();
 
-                                    // Determine if we need to show truncation or tooltip with full content
-                                    // bytes.len() is the effective string length (stopped at null or limit)
-
-                                    // If we stopped at the display limit (40) but allocated size is larger, it might be truncated.
                                     let truncated_visual = bytes.len() == 40 && max_scan_len > 40;
 
-                                    // Read full string for tooltip only if visually truncated
                                     let mut full_s = s.clone();
                                     if truncated_visual {
                                         let mut full_bytes = Vec::new();
-                                        // Scan up to max_scan_len (which is allocated length)
                                         for i in 0..max_scan_len {
                                             let b = app.session.snapshot().memory
                                                 [addr.wrapping_add(i as u16) as usize];
@@ -502,7 +482,6 @@ pub(crate) fn show_variables(app: &mut Z80App, ui: &mut egui::Ui) {
                                             len, full_s
                                         ));
                                     } else {
-                                        // Not truncated visually, so 's' is the full string (or at least as much as fits in allocated)
                                         ui.monospace(format!("\"{}\"", s)).on_hover_text(format!(
                                             "Allocated: {}\nString: \"{}\"",
                                             len, s
@@ -558,7 +537,6 @@ pub(crate) fn show_variables(app: &mut Z80App, ui: &mut egui::Ui) {
                                         SymbolType::Word => 2,
                                         _ => 1,
                                     };
-                                    // If length is odd, maybe show up to last even?
                                     let word_count = len / 2;
                                     if word_count == 0 {
                                         // Fallback for single byte if forced?

@@ -58,7 +58,7 @@ pub struct Symbol {
 pub struct AssemblyLine {
     pub address: u16,
     pub bytes: Vec<u8>,
-    /// Pre-formatted text for the listing's Data column.
+
     pub data_column: String,
 }
 
@@ -230,10 +230,6 @@ fn parse_instruction(
             }
             let target = resolve_immediate(&operands[0], labels, is_dry_run)?;
             if target < pc {
-                // In dry run (Pass 1), we might have temporary 0 labels producing bad targets,
-                // but ORG usually uses constants.
-                // If using labels in ORG (advanced), Pass 1 might fail.
-                // We assume ORG uses constants or pre-defined symbols.
                 return Err("ORG cannot go backwards".to_string());
             }
             Ok(vec![0; (target - pc) as usize])

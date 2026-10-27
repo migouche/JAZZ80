@@ -36,7 +36,6 @@ pub mod rot {
         let pv = result.count_ones().is_multiple_of(2);
         let x = (result & 0x08) != 0;
         let y = (result & 0x20) != 0;
-        // Carry is passed as parameter
 
         (if carry { flags::CARRY } else { 0x00 })
             | (if pv { flags::PARITY_OVERFLOW } else { 0x00 })
@@ -246,7 +245,6 @@ pub fn inc(value: u8) -> (u8, u8) {
     let x = (result & 0x08) != 0;
     let y = (result & 0x20) != 0;
 
-    // Note: C flag is not affected by INC, caller must preserve it.
     let flags = (if n { flags::ADD_SUB } else { 0x00 })
         | (if pv { flags::PARITY_OVERFLOW } else { 0x00 })
         | (if x { flags::X } else { 0x00 })
@@ -269,18 +267,15 @@ pub fn add_16(a: u16, b: u16, current_flags: u8, use_carry: bool) -> (u16, u8) {
     let (result, c2) = res_1.overflowing_add(carry_in);
     let c = c1 || c2;
 
-    // Half Carry is carry from bit 11 to 12
     let h = ((a & 0x0FFF) + (b & 0x0FFF) + carry_in) > 0x0FFF;
 
     let n = false;
-    // X and Y are ALWAYS bits 11 and 13 of the result
     let x = (result & 0x0800) != 0;
     let y = (result & 0x2000) != 0;
 
     let (s, z, pv) = if use_carry {
         let s = (result & 0x8000) != 0;
         let z = result == 0;
-        // Overflow: operands same sign, result different sign
         let pv = ((a ^ result) & (b ^ result) & 0x8000) != 0;
         (s, z, pv)
     } else {
@@ -307,7 +302,6 @@ pub fn sub_16(a: u16, b: u16, current_flags: u8, use_carry: bool) -> (u16, u8) {
     let (result, b2) = res_1.overflowing_sub(carry_in);
     let c = b1 || b2;
 
-    // Half Borrow is borrow from bit 12
     let h = (a & 0x0FFF) < ((b & 0x0FFF) + carry_in);
 
     let n = true;
@@ -317,7 +311,6 @@ pub fn sub_16(a: u16, b: u16, current_flags: u8, use_carry: bool) -> (u16, u8) {
     let (s, z, pv) = if use_carry {
         let s = (result & 0x8000) != 0;
         let z = result == 0;
-        // Overflow: operands different sign, result sign differs from 'a'
         let pv = ((a ^ b) & (a ^ result) & 0x8000) != 0;
         (s, z, pv)
     } else {
@@ -343,7 +336,6 @@ pub fn dec(value: u8) -> (u8, u8) {
     let x = (result & 0x08) != 0;
     let y = (result & 0x20) != 0;
 
-    // Note: C flag is not affected by DEC, caller must preserve it.
     let flags = (if n { flags::ADD_SUB } else { 0x00 })
         | (if pv { flags::PARITY_OVERFLOW } else { 0x00 })
         | (if x { flags::X } else { 0x00 })

@@ -6,19 +6,15 @@ use super::{
     parse_operands, qualify_label, qualify_local_tokens, resolve_immediate, tokenize,
 };
 
-/// One source line, classified during the analysis pass.
 pub(crate) enum Statement {
-    /// `NAME: ...` (the rest of the line is the payload)
     Label {
         name: String,
         payload: Vec<Token>,
     },
-    /// `NAME EQU value`
     Equ {
         name: String,
         operands: Vec<Operand>,
     },
-    /// Any other non-empty line (instruction or directive)
     Instruction(Vec<Token>),
     Empty,
 }
@@ -34,8 +30,6 @@ pub(super) fn assemble_source(code: &str) -> Result<AssemblyResult, String> {
     emit_assembly(analysis)
 }
 
-/// Symbols collected by the analysis pass, with an address cache so instruction
-/// sizing never has to rebuild a `HashMap` inside the per-line loop.
 #[derive(Default)]
 struct SymbolTable {
     symbols: HashMap<String, Symbol>,
@@ -75,8 +69,6 @@ struct Analysis {
     line_addresses: HashMap<usize, u16>,
 }
 
-/// First pass: classify every source line, resolve every symbol address, and
-/// record the final `SymbolType` for data definitions.
 fn analyze(code: &str) -> Result<Analysis, String> {
     let mut symbols = SymbolTable::default();
     let mut lines = Vec::new();
@@ -280,8 +272,6 @@ fn is_db_line(tokens: &[Token]) -> bool {
     )
 }
 
-/// Fold one `DB`/`DEFB`/`DS`/`DEFS` row into its label's symbol, creating a
-/// `LABEL[line]` row symbol for a continuation row exactly as before.
 fn update_data_symbol(
     symbols: &mut SymbolTable,
     label: &str,
@@ -301,9 +291,6 @@ fn update_data_symbol(
 
     match mnemonic.as_str() {
         "DB" | "DEFB" => {
-            // The operands were already parsed successfully by
-            // `parse_instruction`; a string literal operand can only come from
-            // a string token, so this does not need a second parse.
             let contains_string = tokens
                 .iter()
                 .skip(1)
@@ -348,7 +335,6 @@ fn update_data_symbol(
     }
 }
 
-/// Second pass: encode every recorded statement with the complete symbol table.
 fn emit_assembly(analysis: Analysis) -> Result<AssemblyResult, String> {
     let Analysis {
         lines,

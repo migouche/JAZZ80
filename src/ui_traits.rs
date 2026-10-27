@@ -7,11 +7,7 @@ pub trait DeviceWithUi: IODevice + Send {
     fn get_window_open_state(&self) -> bool;
     fn set_window_open_state(&mut self, open: bool);
 
-    /// Draw the device in its standard floating window.
-    ///
-    /// The title is [`Self::get_name`]. Closing the window is reflected in
-    /// [`Self::set_window_open_state`], which is how the header's Attached
-    /// list stays in sync.
+
     fn show_window(
         &mut self,
         ctx: &egui::Context,

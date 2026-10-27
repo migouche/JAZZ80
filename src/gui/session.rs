@@ -25,9 +25,7 @@ impl SessionState {
     }
 }
 
-/// Execution state: the machine, the cached snapshot, the runner and the
-/// explicit lifecycle state that replaces the old `is_running` /
-/// `last_stop_addr` pair.
+
 pub struct DebugSession {
     machine: Option<Machine>,
     snapshot: MachineSnapshot,
@@ -167,7 +165,6 @@ mod tests {
         session.finish_run(0x1234);
         assert_eq!(session.state(), SessionState::Paused { at: Some(0x1234) });
 
-        // Stopping keeps the address of the last breakpoint hit.
         session.pause();
         assert_eq!(session.last_stop_addr(), Some(0x1234));
 
@@ -175,8 +172,6 @@ mod tests {
         assert_eq!(session.state(), SessionState::Idle);
         assert_eq!(session.last_stop_addr(), None);
 
-        // The run left a machine inside the runner; reclaim it so the worker
-        // thread terminates instead of living until the test process exits.
         let _ = session.runner_mut().take_machine();
     }
 

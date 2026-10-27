@@ -1,7 +1,6 @@
 use super::Token;
 
-/// The encoded bytes of one source line as the listing's Data column shows
-/// them. Only the first eight bytes are included.
+
 pub(super) fn data_column(tokens: &[Token], bytes: &[u8]) -> String {
     // `ORG` emits padding bytes, but the listing does not show them, and lines
     // without a mnemonic or bytes have nothing to show.
@@ -24,7 +23,7 @@ pub(super) fn data_column(tokens: &[Token], bytes: &[u8]) -> String {
             .chunks(2)
             .map(|chunk| {
                 if chunk.len() == 2 {
-                    // Little-endian format for display.
+    
                     format!("{:02X}{:02X}", chunk[1], chunk[0])
                 } else {
                     format!("{:02X}", chunk[0])
@@ -33,7 +32,7 @@ pub(super) fn data_column(tokens: &[Token], bytes: &[u8]) -> String {
             .collect::<Vec<_>>()
             .join(", "),
         _ => {
-            // Keep prefixes glued to the main opcode.
+
             let op_len = if bytes.len() > 1 && matches!(bytes[0], 0xCB | 0xDD | 0xED | 0xFD) {
                 2
             } else {
@@ -60,8 +59,6 @@ pub(super) fn data_column(tokens: &[Token], bytes: &[u8]) -> String {
             let has_parens = tokens.iter().any(|t| matches!(t, Token::OpenParen))
                 && tokens.iter().any(|t| matches!(t, Token::CloseParen));
 
-            // The `open < comma` comparison distinguishes `LD (nn), A`
-            // (parenthesised first operand) from `LD A, (nn)`.
             match (comma, has_parens) {
                 (Some(c), true) if open.is_some_and(|o| o < c) => {
                     format!("{} ({})", op_hex, arg_hex)
